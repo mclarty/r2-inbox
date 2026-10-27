@@ -27,6 +27,10 @@ Rules:
 - No private value is ever hard-coded in the repo: names, bucket, domain, recipients and hostnames all come from the config.
 - `overlay-sync` uploads only `config/*.json` keys, and validates `droplist.json` with the worker's own compiler first.
 - Secrets (`NOTIFY_URL`, `NOTIFY_AUTH`) come from the environment, not from the overlay.
+- If an existing worker has `NOTIFY_URL` as a plain **var** (not a secret), keep `deploy.keepVars: true` and don't run
+  `secrets` for it: `wrangler secret put` refuses a name already bound as a var. To convert, delete the var in the dashboard
+  and run `secrets` right away (messages in between get a `failed/` notify record).
+- `fetch --message-id … --date` uses the **UTC** arrival date (keys are `inbound/YYYY/MM/DD` in UTC).
 
 ## Adopting existing workers and buckets
 

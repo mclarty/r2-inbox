@@ -184,7 +184,12 @@ export async function deployWorkers(ctx, cfg, { accessAud = "", only = null } = 
 export function putSecrets(ctx, cfg) {
   const url = ctx.env.NOTIFY_URL || cfg.webhook.url || "";
   const auth = ctx.env.NOTIFY_AUTH || "";
-  if (!url) { ctx.log("skip  NOTIFY_URL not provided (no webhook; every message gets a failed/ notify_unset record)"); return; }
+  if (!url) {
+    ctx.log(cfg.deploy.keepVars
+      ? "skip  NOTIFY_URL not provided; any NOTIFY_URL/NOTIFY_AUTH already on the worker (var or secret) is left as-is"
+      : "skip  NOTIFY_URL not provided (no webhook; every message gets a failed/ notify_unset record)");
+    return;
+  }
   if (!/^https:\/\//.test(url)) throw new Error("NOTIFY_URL must start with https://");
   if (!ctx.dryRun) writeGenerated(ctx, cfg, "email");
   ctx.wrangler(["secret", "put", "NOTIFY_URL", "-c", GENERATED], { cwd: APP_DIR.email, input: url, inputLabel: "$NOTIFY_URL (hidden)" });
@@ -255,9 +260,17 @@ export async function fetchMessage(ctx, cfg, { id, messageId, date, out }) {
     if (!messageId || !/^\d{4}-\d{2}-\d{2}$/.test(date || "")) throw new Error("use --id <ID|key>, or --message-id <id> --date YYYY-MM-DD");
     const prefix = `inbound/${date.replaceAll("-", "/")}/`;
     const hash = messageIdHash(messageId);
-    const list = await ctx.api("GET", `${acct(ctx)}/r2/buckets/${cfg.bucket}/objects?prefix=${encodeURIComponent(prefix)}&per_page=1000`,
-      undefined, { dryResult: [] }) || [];
-    const hit = list.find((o) => String(o.key).endsWith(`-${hash}.eml`));
+    // Follow result_info.cursor: a busy day can exceed one page.
+    let hit = null, cursor = "";
+    for (let page = 0; page < 100 && !hit; page++) {
+      const q = `prefix=${encodeURIComponent(prefix)}&per_page=1000` + (cursor ? `&cursor=${encodeURIComponent(cursor)}` : "");
+      const r = ctx.dryRun
+        ? { result: await ctx.api("GET", `${acct(ctx)}/r2/buckets/${cfg.bucket}/objects?${q}`, undefined, { dryResult: [] }), info: null }
+        : await ctx.api("GET", `${acct(ctx)}/r2/buckets/${cfg.bucket}/objects?${q}`, undefined, { withInfo: true });
+      hit = (r.result || []).find((o) => String(o.key).endsWith(`-${hash}.eml`)) || null;
+      cursor = r.info && r.info.is_truncated && r.info.cursor ? r.info.cursor : "";
+      if (!cursor) break;
+    }
     if (!hit) { if (ctx.dryRun) return null; throw new Error(`no message with that Message-ID under ${prefix}`); }
     key = hit.key;
   }

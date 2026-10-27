@@ -170,8 +170,8 @@ Create a **custom token** (My Profile → API Tokens → Create Custom Token) sc
 | Account | **Access: Apps and Policies: Edit** | only if `webInbox.access.enabled` |
 | Zone | **Zone: Read** | finding the zone |
 | Zone | **Email Routing Rules: Edit** | catch-all / address rules |
-| Zone | **Zone Settings: Edit**, **DNS: Edit** | only for the one-time "enable Email Routing + MX/SPF" step. Leave these out if you enable Email Routing in the dashboard. |
-| Zone | **Workers Routes: Edit** | attaching the inbox custom domain |
+| Zone | **Zone Settings: Edit** (DNS: Edit recommended) | only for the one-time "enable Email Routing + MX/SPF" step (`POST /zones/{id}/email/routing/dns` accepts Zone Settings Write). Leave these out if you enable Email Routing in the dashboard. |
+| Zone | **Workers Routes: Edit** | attaching the inbox custom domain via wrangler (the custom-domain API itself requires Workers Scripts: Edit, which you already have) |
 
 `scripts/doctor` checks each area and tells you which one returns 403. After setup, a narrower **deploy token** (Workers Scripts: Edit, plus Workers Routes: Edit if the hostname changes) is enough for CI deploys.
 

@@ -30,7 +30,7 @@ export function createContext({ dryRun = false, env = process.env, log = console
   // Replace the real account id in printed paths with a variable reference.
   const show = (path) => (accountId ? path.split(accountId).join("$CLOUDFLARE_ACCOUNT_ID") : path);
 
-  async function api(method, path, body, { allow404 = false, dryResult = null } = {}) {
+  async function api(method, path, body, { allow404 = false, dryResult = null, withInfo = false } = {}) {
     const url = API + path;
     if (dryRun) {
       const data = body === undefined ? "" : ` \\\n    -H 'Content-Type: application/json' --data '${JSON.stringify(body)}'`;
@@ -54,6 +54,7 @@ export function createContext({ dryRun = false, env = process.env, log = console
       const msg = errs.map((x) => `${x.code}: ${x.message}`).join("; ") || `HTTP ${res.status}`;
       throw new CfError(redact(`${method} ${show(path)} failed: ${msg}`, secrets), res.status, errs);
     }
+    if (withInfo) return { result: json ? json.result : null, info: (json && json.result_info) || null };
     return json ? json.result : null;
   }
 
