@@ -1,0 +1,32 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - name: shellcheck
+        run: shellcheck scripts/*.sh
+      - name: Dry-run scripts with fake credentials (no network calls are made)
+        env:
+          CLOUDFLARE_API_TOKEN: fake-token-for-dry-run
+          CLOUDFLARE_ACCOUNT_ID: 0123456789abcdef0123456789abcdef
+        run: |
+          cp r2-inbox.config.example.json r2-inbox.config.json
+          node scripts/r2-inbox.mjs setup --dry-run
+          node scripts/r2-inbox.mjs teardown --dry-run

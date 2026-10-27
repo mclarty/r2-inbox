@@ -1,0 +1,50 @@
+# Optional manual deploy. Configure repository secrets:
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, R2_INBOX_CONFIG_JSON (full contents of r2-inbox.config.json)
+# and optionally NOTIFY_URL / NOTIFY_AUTH. Nothing runs on push.
+name: Deploy (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "What to deploy"
+        type: choice
+        options: [all, email, web, routing]
+        default: all
+      dry_run:
+        description: "Dry run only"
+        type: boolean
+        default: true
+permissions:
+  contents: read
+concurrency: deploy
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - name: Write config
+        env:
+          R2_INBOX_CONFIG_JSON: ${{ secrets.R2_INBOX_CONFIG_JSON }}
+        run: printf '%s' "$R2_INBOX_CONFIG_JSON" > r2-inbox.config.json
+      - name: Deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          NOTIFY_URL: ${{ secrets.NOTIFY_URL }}
+          NOTIFY_AUTH: ${{ secrets.NOTIFY_AUTH }}
+          TARGET: ${{ inputs.target }}
+          DRY: ${{ inputs.dry_run && '--dry-run' || '' }}
+        run: |
+          node scripts/r2-inbox.mjs doctor $DRY || true
+          case "$TARGET" in
+            all) node scripts/r2-inbox.mjs deploy $DRY ;;
+            email|web) node scripts/r2-inbox.mjs deploy "$TARGET" $DRY ;;
+            routing) node scripts/r2-inbox.mjs routing --force $DRY ;;
+          esac

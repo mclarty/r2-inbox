@@ -1,0 +1,18 @@
+{
+  "name": "r2-inbox",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Self-hosted inbound mail on Cloudflare: Email Routing -> Worker -> private R2, plus a web inbox.",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": ["apps/email-worker", "apps/web-inbox"],
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "npm run test --workspaces && node --test scripts/test/",
+    "lint": "node scripts/lint.mjs",
+    "check": "npm run lint && npm test",
+    "doctor": "node scripts/r2-inbox.mjs doctor",
+    "setup": "node scripts/r2-inbox.mjs setup",
+    "deploy": "node scripts/r2-inbox.mjs deploy"
+  }
+}

@@ -1,0 +1,15 @@
+From: Example News <news@example.com>
+To: you@example.com
+Subject: Weekly digest
+Date: Tue, 13 Oct 2026 15:00:00 -0400
+Message-ID: <abc123@example.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+
+Hello,
+
+This is a fully synthetic sample message used by the test suite.
+All addresses use reserved example domains.
+
+-- 
+Example News

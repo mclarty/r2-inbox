@@ -1,0 +1,19 @@
+// Template config. `scripts/deploy.sh` renders a real config from r2-inbox.config.json into
+// .wrangler.generated.jsonc (gitignored). Values here are placeholders for local `wrangler dev`.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "r2-inbox-web",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-13",
+  // Keep workers.dev off in production: only the Access-protected custom domain should serve.
+  "workers_dev": false,
+  "vars": {
+    "BUCKET_NAME": "my-mail-bucket",
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
+  "r2_buckets": [
+    { "binding": "MAIL", "bucket_name": "my-mail-bucket" }
+  ]
+  // "routes": [{ "pattern": "inbox.example.com", "custom_domain": true }]
+}

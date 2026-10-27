@@ -1,0 +1,9 @@
+{
+  "_comment": "Optional R2 object config/unsubscribed.json. Drives the Unsubscribed pills in the web inbox. Written by your own tooling.",
+  "keys": {
+    "inbound/2026/01/02/20260102T030405006Z-0123456789abcdef.eml": { "status": "ok", "method": "one-click", "ts": "2026-01-02T04:00:00Z", "sender": "promo@newsletter.example" }
+  },
+  "senders": {
+    "promo@newsletter.example": { "key": "inbound/2026/01/02/20260102T030405006Z-0123456789abcdef.eml", "status": "ok", "method": "one-click", "ts": "2026-01-02T04:00:00Z" }
+  }
+}

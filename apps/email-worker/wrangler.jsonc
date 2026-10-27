@@ -1,0 +1,20 @@
+// Template config. `scripts/deploy.sh` renders a real config from r2-inbox.config.json into
+// .wrangler.generated.jsonc (gitignored). Values here are placeholders for local `wrangler dev`.
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "r2-inbox-email",
+  "main": "src/index.js",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  "observability": { "enabled": true },
+  "vars": {
+    "ACCEPT_RECIPIENTS": "you@example.com,you+*@example.com",
+    "SELF_DOMAINS": "example.com",
+    "NEVER_DROP": "",
+    "REJECT_DROPPED": "false"
+  },
+  "r2_buckets": [
+    { "binding": "INBOUND", "bucket_name": "my-mail-bucket" }
+  ]
+  // Secrets (never in this file): NOTIFY_URL, NOTIFY_AUTH -> `wrangler secret put NAME`
+}

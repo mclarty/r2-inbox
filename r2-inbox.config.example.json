@@ -1,0 +1,24 @@
+{
+  "_comment": "Copy to r2-inbox.config.json (gitignored) and edit. See docs/configuration.md. Credentials are NOT stored here.",
+  "domain": "example.com",
+  "bucket": "my-mail-bucket",
+  "workers": { "email": "r2-inbox-email", "web": "r2-inbox-web" },
+  "routing": { "mode": "catch_all", "addresses": [], "enableEmailRouting": true },
+  "acceptRecipients": ["you@example.com", "you+*@example.com"],
+  "selfDomains": ["example.com"],
+  "neverDrop": [],
+  "rejectDropped": false,
+  "webhook": { "url": "" },
+  "lifecycle": { "expireDays": 0 },
+  "webInbox": {
+    "enabled": true,
+    "hostname": "inbox.example.com",
+    "access": {
+      "enabled": true,
+      "teamDomain": "myteam.cloudflareaccess.com",
+      "allowEmails": ["you@example.com"],
+      "sessionDuration": "24h",
+      "aud": ""
+    }
+  }
+}

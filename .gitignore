@@ -1,0 +1,16 @@
+node_modules/
+.wrangler/
+.dev.vars
+.env
+.env.*
+# Real deployment config and anything rendered from it
+r2-inbox.config.json
+**/.wrangler.generated.json
+# Never commit mail or drop lists with real senders
+*.eml
+!apps/email-worker/test/sample.eml
+droplist.json
+unsubscribed.json
+*.bak*
+.DS_Store
+coverage/

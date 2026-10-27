@@ -1,0 +1,19 @@
+{
+  "name": "@r2-inbox/web-inbox",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "test": "node --test test/",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "htmlparser2": "^12.0.0",
+    "postal-mime": "^4.0.5"
+  },
+  "devDependencies": {
+    "wrangler": "^4.150.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "_comment": "Uploaded to R2 as config/droplist.json by scripts/droplist-sync. Matching is case-insensitive.",
+  "reject_dropped": true,
+  "never_drop": ["bank.example"],
+  "allow": {
+    "senders": ["receipts@shop.example"],
+    "domains": ["orders.shop.example"]
+  },
+  "drop": {
+    "senders": [{ "address": "promo@newsletter.example", "note": "weekly promo" }],
+    "domains": [
+      { "domain": "marketing.example", "subdomains": true },
+      { "domain": "deals.shop.example" }
+    ],
+    "subjects": [{ "pattern": "^\\[ad\\]", "flags": "i" }]
+  }
+}
