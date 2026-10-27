@@ -40,7 +40,8 @@ function csv(v) {
   return String(v || "").split(",").map((x) => x.trim().toLowerCase()).filter(Boolean);
 }
 function globRe(pattern) {
-  const esc = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^@]*");
+  // A bare "*" local part ("*@sub.example.com") must match at least one character.
+  const esc = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/^\*@/, "\u0000@").replace(/\*/g, "[^@]*").replace("\u0000", "[^@]+");
   return new RegExp("^" + esc + "$");
 }
 // Apply worker env vars to module settings. Called on every email (cheap) and by tests.
