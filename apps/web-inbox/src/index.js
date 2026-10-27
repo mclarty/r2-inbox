@@ -62,28 +62,23 @@ export default {
 };
 
 // Cloudflare Access guards every request. On top of that, a delete has to be a
-// same-origin JSON POST, so a page on another site cannot trigger one.
-async function deleteRequest(request, url) {
-  if (request.method !== "POST") throw httpError(405, "Use POST to delete a message.");
+// same-origin DELETE, so a page on another site cannot trigger one.
+function deleteRequest(request, url) {
   const origin = request.headers.get("origin");
   if (origin && origin !== url.origin) throw httpError(403, "Cross-site delete refused.");
   const site = request.headers.get("sec-fetch-site");
   if (site && site !== "same-origin") throw httpError(403, "Cross-site delete refused.");
-  const type = (request.headers.get("content-type") || "").toLowerCase();
-  if (!type.startsWith("application/json")) throw httpError(415, "Send the key as JSON.");
-  let body;
-  try {
-    body = await request.json();
-  } catch {
-    throw httpError(400, "Send the key as JSON.");
-  }
-  return body && typeof body.key === "string" ? body.key : "";
+  return url.searchParams.get("key") || "";
 }
 
 async function route(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
   await requireAccess(request, env);
+  const method = request.method;
+  if (method === "DELETE" ? path !== "/api/message" : method !== "GET" && method !== "HEAD") {
+    throw httpError(405, "Method not allowed.");
+  }
   if (path === "/") return html(PAGE);
   if (path === "/favicon.ico") return new Response(null, { status: 204, headers: baseHeaders() });
   if (!env.MAIL) throw httpError(500, "The MAIL R2 binding is not configured.");
@@ -97,8 +92,8 @@ async function route(request, env) {
     payload.bucket = env.BUCKET_NAME || "mail";
     return json(payload);
   }
-  if (path === "/api/delete") {
-    const key = await deleteRequest(request, url);
+  if (path === "/api/message" && request.method === "DELETE") {
+    const key = deleteRequest(request, url);
     return json(await deleteMessage(env.MAIL, key));
   }
   if (path === "/api/message" || path === "/body" || path === "/part") {

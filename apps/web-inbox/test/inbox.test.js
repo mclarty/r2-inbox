@@ -294,12 +294,10 @@ test("delete removes the message and its status records, and refuses anything el
     { key: "config/droplist.json", uploaded: when, body: json({ senders: [] }) },
   ];
   const env = { MAIL: fakeBucket(entries) };
-  const call = async (body, init = {}) => {
-    const response = await worker.fetch(new Request("https://inbox.example/api/delete", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(init.headers || {}) },
-      body: JSON.stringify(body),
-      ...(init.method ? { method: init.method, body: undefined } : {}),
+  const call = async (key, init = {}) => {
+    const response = await worker.fetch(new Request("https://inbox.example/api/message?key=" + encodeURIComponent(key), {
+      method: init.method || "DELETE",
+      headers: init.headers || {},
     }), env);
     return { status: response.status, body: JSON.parse(await response.text()) };
   };
@@ -317,20 +315,18 @@ test("delete removes the message and its status records, and refuses anything el
     "/inbound/2026/10/15/x.eml",
     "",
   ]) {
-    assert.equal((await call({ key: bad })).status, 400, bad);
+    assert.equal((await call(bad)).status, 400, bad);
   }
-  assert.equal((await call({ key: [key] })).status, 400);
-  assert.equal((await call({ key }, { method: "GET" })).status, 405);
-  assert.equal((await call({ key }, { headers: { origin: "https://evil.example" } })).status, 403);
-  assert.equal((await call({ key }, { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
-  assert.equal((await call({ key }, { headers: { "content-type": "text/plain" } })).status, 415);
-  assert.equal((await call({ key: "inbound/2026/10/15/missing.eml" })).status, 404);
+  assert.equal((await call(key, { method: "POST" })).status, 405);
+  assert.equal((await call(key, { headers: { origin: "https://evil.example" } })).status, 403);
+  assert.equal((await call(key, { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
+  assert.equal((await call("inbound/2026/10/15/missing.eml")).status, 404);
   assert.equal(entries.length, 8);
 
   const before = JSON.parse(await (await worker.fetch(new Request("https://inbox.example/api/messages"), env)).text());
   assert.equal(before.total, 2);
 
-  const done = await call({ key }, { headers: { origin: "https://inbox.example", "sec-fetch-site": "same-origin" } });
+  const done = await call(key, { headers: { origin: "https://inbox.example", "sec-fetch-site": "same-origin" } });
   assert.equal(done.status, 200);
   assert.equal(done.body.deleted, true);
   assert.equal(done.body.message, key);
@@ -352,11 +348,11 @@ test("delete removes the message and its status records, and refuses anything el
   assert.equal(after.messages[0].key, "inbound/2024/01/01/old.eml");
   const gone = await worker.fetch(new Request("https://inbox.example/api/message?key=" + encodeURIComponent(key)), env);
   assert.equal(gone.status, 404);
-  assert.equal((await call({ key })).status, 404);
+  assert.equal((await call(key)).status, 404);
 
   const page = await get("/");
   assert.match(page.body, /Delete this email permanently\?/);
-  assert.match(page.body, /\/api\/delete/);
+  assert.match(page.body, /method: "DELETE"/);
 });
 
 test("headers drill-down has a copy button with clipboard fallback", async () => {

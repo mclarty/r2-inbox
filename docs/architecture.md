@@ -26,7 +26,7 @@ The key's `<ts>-<hash>` part is the **Message ID** shown in the inbox; `hash = s
 | `GET /api/message?key` | parsed message: headers, addresses, attachments, statuses |
 | `GET /body?key&images=0/1` | sanitized HTML (or escaped text) for the sandboxed iframe |
 | `GET /part?key&i&download` | attachment bytes with safe content-type/disposition |
-| `POST /api/delete` | `{key}` → deletes `.eml` + matching `dropped/`/`failed/` records |
+| `DELETE /api/message?key=<key>` | deletes `.eml` + matching `dropped/`/`failed/` records |
 
 Every request first passes `requireAccess` (no-op unless `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` are set).
 

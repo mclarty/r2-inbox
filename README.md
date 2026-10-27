@@ -45,8 +45,7 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 - Reader with **sanitized HTML** in a sandboxed iframe. Remote images can be toggled, and you can fall back to plain text. Attachments can be downloaded or viewed inline when that's safe, and SVG and other active types are always sandboxed.
 - **Headers view** with copy-to-clipboard. The **Message ID** (the stored file name) copies with one tap.
 - **Dropped / Failed pills** come from the `dropped/` and `failed/` records. Opening the message shows the reason. **Unsubscribed** pills come from an optional `config/unsubscribed.json`.
-- **Delete**: `POST /api/delete` removes the `.eml` and its status records. Only `inbound/YYYY/MM/DD/*.eml` keys are accepted, and only from same-origin JSON requests.
-- On mobile: swipe right to go back, and the first tap after going back is reliable. Supports light and dark mode.
+- **Delete**: `DELETE /api/message?key=<key>` removes the `.eml` and its status records. Only `inbound/YYYY/MM/DD/*.eml` keys are accepted, and only from same-origin requests.
 - **Auth**: Cloudflare Access at the edge. The Worker can also verify the Access JWT itself as a second layer (`ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`).
 
 **Tooling (`scripts/`)**
@@ -56,15 +55,15 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 
 ```mermaid
 flowchart LR
-  S[Sending MTA] -->|SMTP, MX| ER[Cloudflare Email Routing<br/>catch-all or address rule]
-  ER -->|"Send to Worker (by name)"| EW[email-worker]
-  EW -->|put raw .eml| R2[(R2 bucket - private<br/>inbound/ dropped/ failed/ config/)]
-  EW -->|get config/droplist.json<br/>cached 5 min| R2
-  EW -. optional POST key+auth verdict .-> WH[Your webhook]
-  EW -. setReject 550 5.7.1 .-> S
-  U[You - browser] --> AC[Cloudflare Access<br/>email policy]
-  AC -->|Cf-Access-Jwt-Assertion| WI[web-inbox]
-  WI -->|list / get / delete| R2
+  S["Sending MTA"] -->|"SMTP, MX"| ER["Cloudflare Email Routing<br/>catch-all or address rule"]
+  ER -->|"Send to Worker (by name)"| EW["email-worker"]
+  EW -->|"put raw .eml"| R2[("R2 bucket, private<br/>inbound/ dropped/ failed/ config/")]
+  EW -->|"get config/droplist.json<br/>cached 5 min"| R2
+  EW -.->|"optional POST: key and auth verdict"| WH["Your webhook"]
+  EW -.->|"setReject 550 5.7.1"| S
+  U["You, in a browser"] --> AC["Cloudflare Access<br/>email policy"]
+  AC -->|"Cf-Access-Jwt-Assertion"| WI["web-inbox"]
+  WI -->|"list / get / delete"| R2
 ```
 
 R2 layout:

@@ -6,7 +6,7 @@ See README → Security model for the summary. Additional details:
   All `on*`, `srcdoc`, `formaction` attributes and `javascript:`, `vbscript:` and `data:text/html` URLs are removed; CSS is
   filtered. The body iframe sandbox omits `allow-scripts` and `allow-same-origin`, and the body response carries a
   restrictive CSP. Remote images can be blocked per message (tracking pixels).
-- **Threat: CSRF delete.** Same-origin JSON POST only; key must match `^inbound/\d{4}/\d{2}/\d{2}/[^/]+\.eml$`.
+- **Threat: CSRF delete.** Same-origin DELETE only; key must match `^inbound/\d{4}/\d{2}/\d{2}/[^/]+\.eml$`.
 - **Threat: exposed viewer.** Access at the edge, `workers_dev` off, optional JWT verification in the Worker
   (`requireAccess`, RS256 via team JWKS, audience/issuer/expiry checked, keys cached 10 minutes).
 - **Threat: spoofed "from me" mail driving automation.** Only Cloudflare's own Authentication-Results is trusted;
