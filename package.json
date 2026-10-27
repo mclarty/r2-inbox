@@ -8,7 +8,7 @@
   "workspaces": ["apps/email-worker", "apps/web-inbox"],
   "engines": { "node": ">=22" },
   "scripts": {
-    "test": "npm run test --workspaces && node --test scripts/test/",
+    "test": "npm run test --workspaces && node --test scripts/test/scripts.test.mjs",
     "lint": "node scripts/lint.mjs",
     "check": "npm run lint && npm test",
     "doctor": "node scripts/r2-inbox.mjs doctor",

@@ -6,7 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "node --test test/",
+    "test": "node --test test/access.test.js test/inbox.test.js",
     "deploy": "wrangler deploy"
   },
   "dependencies": {

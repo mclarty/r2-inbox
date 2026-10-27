@@ -5,7 +5,7 @@
   "license": "MIT",
   "type": "module",
   "scripts": {
-    "test": "node --test test/",
+    "test": "node --test test/index.test.mjs test/auth.test.mjs",
     "deploy": "wrangler deploy"
   },
   "devDependencies": {
