@@ -285,7 +285,7 @@ document.title = JSON.stringify({ xss: window.__xss, tags, active, hrefs });
   assert.equal(parsed.active, false);
   const banned = ["iframe", "script", "svg", "math", "form", "img", "video", "object", "embed"];
   assert.deepEqual(parsed.tags.filter((tag) => banned.includes(tag)), []);
-  assert.ok(parsed.hrefs.includes("https://example.com/ok"));
+  assert.equal(parsed.hrefs.filter((href) => href === "https://example.com/ok").length, 1);
   assert.ok(parsed.tags.includes("b"));
 });
 
