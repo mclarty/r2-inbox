@@ -34,4 +34,4 @@ Binding: R2 `INBOUND`.
 
 Binding: R2 `MAIL`.
 
-Outbound mail is optional. See [outbound.md](outbound.md) for the private-config steps. The public example leaves it disabled.
+Outbound mail is optional. See [outbound.md](outbound.md) for the private-config steps. The public example leaves it disabled. Send claims are objects under `outbound/sends/` in this same bucket. Do not expire that prefix.

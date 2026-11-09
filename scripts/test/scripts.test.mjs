@@ -166,6 +166,7 @@ test("droplist-sync rejects a malformed list before uploading", async () => {
 test("lifecycle rules cover inbound/, dropped/, failed/", () => {
   assert.deepEqual(steps.lifecycleRules(30).map((r) => [r.conditions.prefix, r.deleteObjectsTransition.condition.maxAge]),
     [["inbound/", 2592000], ["dropped/", 2592000], ["phishing/", 2592000], ["spam/", 2592000], ["failed/", 2592000]]);
+  assert.equal(steps.lifecycleRules(30).some((rule) => String(rule.conditions.prefix).startsWith("outbound")), false);
 });
 
 // ---- private overlay ----

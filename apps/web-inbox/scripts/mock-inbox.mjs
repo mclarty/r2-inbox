@@ -86,6 +86,8 @@ function mime(lines) {
 }
 
 function bucket() {
+  const records = new Map();
+  let seq = 0;
   return {
     async list({ prefix }) {
       return {
@@ -100,6 +102,17 @@ function bucket() {
       };
     },
     async get(key) {
+      const record = records.get(key);
+      if (record) {
+        return {
+          key,
+          etag: record.etag,
+          httpEtag: record.etag,
+          json: async () => JSON.parse(record.body),
+          text: async () => record.body,
+          arrayBuffer: async () => new TextEncoder().encode(record.body).buffer,
+        };
+      }
       const entry = messages.find((item) => item.key === key);
       if (!entry) return null;
       return {
@@ -116,6 +129,19 @@ function bucket() {
     async head(key) {
       const entry = messages.find((item) => item.key === key);
       return entry ? { key, size: entry.body.byteLength, etag: key, uploaded: entry.uploaded } : null;
+    },
+    async put(key, value, options = {}) {
+      if (!String(key).startsWith("outbound/sends/")) {
+        throw new Error("The mock mailbox only stores send claims.");
+      }
+      const onlyIf = options.onlyIf || {};
+      const current = records.get(key);
+      if (onlyIf.etagDoesNotMatch === "*" && current) return null;
+      if (onlyIf.etagMatches && (!current || current.etag !== onlyIf.etagMatches)) return null;
+      const etag = "mock-etag-" + (++seq);
+      const body = typeof value === "string" ? value : new TextDecoder().decode(value);
+      records.set(key, { etag, body });
+      return { key, etag, httpEtag: etag };
     },
     async delete() {
       throw new Error("The mock mailbox does not delete messages.");

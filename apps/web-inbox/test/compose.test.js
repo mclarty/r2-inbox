@@ -4,15 +4,15 @@ import worker from "../src/index.js";
 import { resetCaches } from "../src/store.js";
 import {
   buildDraft,
-  claimSend,
   htmlToPlain,
   isOwnIdentity,
   normalizeOutgoing,
   parseRecipient,
   parseRecipientList,
   replyRecipients,
-  resetSendLedger,
   sanitizeOutgoingHtml,
+  sendRecordKey,
+  submissionId,
   threadingFromHeaders,
   withSubjectPrefix,
 } from "../src/compose.js";
@@ -38,9 +38,55 @@ function providerOk(result) {
   });
 }
 
+// Models R2's documented conditional put: etagDoesNotMatch "*" creates a key once,
+// and competing updates match the etag. Each call is atomic; calls can interleave.
+function conditionalBucket() {
+  const objects = new Map();
+  let chain = Promise.resolve();
+  let seq = 0;
+  function exclusive(fn) {
+    const run = chain.then(fn, fn);
+    chain = run.then(() => {}, () => {});
+    return run;
+  }
+  return {
+    objects,
+    async put(key, value, options = {}) {
+      return exclusive(() => {
+        const current = objects.get(key);
+        const onlyIf = options.onlyIf || {};
+        if (onlyIf.etagDoesNotMatch === "*" && current) return null;
+        if (onlyIf.etagMatches && (!current || current.etag !== onlyIf.etagMatches)) return null;
+        const etag = "e" + (++seq);
+        const body = typeof value === "string" ? value : new TextDecoder().decode(value);
+        objects.set(key, { etag, body });
+        return { key, etag, httpEtag: etag };
+      });
+    },
+    async get(key) {
+      return exclusive(() => {
+        const current = objects.get(key);
+        if (!current) return null;
+        const body = current.body;
+        return {
+          key,
+          etag: current.etag,
+          httpEtag: current.etag,
+          text: async () => body,
+          json: async () => JSON.parse(body),
+          arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+        };
+      });
+    },
+    async list() {
+      return { objects: [], truncated: false };
+    },
+  };
+}
+
 function configured(fetcher, extra = {}) {
   return {
-    MAIL: extra.MAIL || { async list() { return { objects: [], truncated: false }; } },
+    MAIL: extra.MAIL || conditionalBucket(),
     MAIL_FROM: FROM,
     MAIL_FROM_NAME: "Example Inbox",
     MAIL_REPLY_TO: "you@example.com",
@@ -280,7 +326,6 @@ test("long reference chains keep the current message and drop the oldest ids", (
 });
 
 test("send reports queued mail without calling it delivered", async () => {
-  resetSendLedger();
   let calls = 0;
   let seen = null;
   const fetcher = async (url, init) => {
@@ -305,8 +350,7 @@ test("send reports queued mail without calling it delivered", async () => {
   assert.equal(JSON.stringify(seen.init.body).includes(TOKEN), false);
 });
 
-test("a duplicate send reuses the first result and does not call the provider again", async () => {
-  resetSendLedger();
+test("concurrent submissions on one bucket send once, and a fresh caller replays the stored result", async () => {
   let calls = 0;
   let release;
   const gate = new Promise((resolve) => { release = resolve; });
@@ -315,22 +359,33 @@ test("a duplicate send reuses the first result and does not call the provider ag
     await gate;
     return providerOk({ delivered: ["ada@example.com"], queued: [], permanent_bounces: [], message_id: "<sent@example.com>" });
   };
-  const env = configured(fetcher);
-  const first = sendMessage(env, messageBody({ bcc: [] }), "idempotency-key-same1");
-  const second = sendMessage(env, messageBody({ bcc: [] }), "idempotency-key-same1");
-  await Promise.resolve();
+  const bucket = conditionalBucket();
+  const firstEnv = configured(fetcher, { MAIL: bucket });
+  const secondEnv = configured(fetcher, { MAIL: bucket });
+  const body = messageBody({ bcc: [] });
+  const first = sendMessage(firstEnv, body, "idempotency-key-same1");
+  const second = sendMessage(secondEnv, body, "idempotency-key-same1");
+  const settled = [first, second].map((attempt) => attempt.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error })));
+  const early = await Promise.race(settled);
   assert.equal(calls, 1);
+  assert.equal(early.ok, false);
+  assert.equal(early.error.status, 409);
+  assert.match(early.error.message, /already in progress/);
+  assert.equal(early.error.ambiguous, true);
   release();
-  const [left, right] = await Promise.all([first, second]);
-  assert.equal(left.outcome, "delivered");
-  assert.equal(right.outcome, "delivered");
-  const again = await sendMessage(env, messageBody({ bcc: [] }), "idempotency-key-same1");
+  const both = await Promise.all(settled);
+  assert.equal(both.filter((item) => item.ok && item.value.outcome === "delivered").length, 1);
+  const restarted = configured(fetcher, { MAIL: bucket });
+  const again = await sendMessage(restarted, body, "idempotency-key-same1");
   assert.equal(again.duplicate, true);
+  assert.equal(again.outcome, "delivered");
   assert.equal(calls, 1);
+  const stored = bucket.objects.get(sendRecordKey("idempotency-key-same1")).body;
+  assert.match(stored, /"state":"done"/);
+  assert.equal(stored.includes("<p>"), false);
 });
 
 test("ambiguous provider failures are not retried", async () => {
-  resetSendLedger();
   let calls = 0;
   const fetcher = async () => {
     calls += 1;
@@ -339,10 +394,14 @@ test("ambiguous provider failures are not retried", async () => {
   const env = configured(fetcher);
   await assert.rejects(sendMessage(env, messageBody(), "idempotency-key-ambig1"), (error) => error.status === 502 && error.ambiguous);
   assert.equal(calls, 1);
-  await assert.rejects(sendMessage(env, messageBody(), "idempotency-key-ambig1"), (error) => error.status === 409);
+  await assert.rejects(sendMessage(env, messageBody(), "idempotency-key-ambig1"), (error) => error.status === 409 && error.ambiguous);
+  assert.equal(calls, 1);
+  const restarted = configured(fetcher, { MAIL: env.MAIL });
+  await assert.rejects(sendMessage(restarted, messageBody(), "idempotency-key-ambig1"), (error) => {
+    return error.status === 409 && /not sent again/.test(error.message);
+  });
   assert.equal(calls, 1);
 
-  resetSendLedger();
   calls = 0;
   const refused = async () => new Response(JSON.stringify({
     success: false,
@@ -355,18 +414,23 @@ test("ambiguous provider failures are not retried", async () => {
 });
 
 test("provider rejection count stays at one call", async () => {
-  resetSendLedger();
   let calls = 0;
   const fetcher = async () => {
     calls += 1;
     return new Response(JSON.stringify({ success: false, errors: [{ code: 7000, message: "Sender domain is not verified" }] }), { status: 400 });
   };
-  await assert.rejects(sendMessage(configured(fetcher), messageBody(), "idempotency-key-once01"), /not verified/);
+  const env = configured(fetcher);
+  await assert.rejects(sendMessage(env, messageBody(), "idempotency-key-once01"), /not verified/);
+  assert.equal(calls, 1);
+  await assert.rejects(sendMessage(configured(fetcher, { MAIL: env.MAIL }), messageBody(), "idempotency-key-once01"), /not verified/);
+  assert.equal(calls, 1);
+  await assert.rejects(sendMessage(configured(fetcher, { MAIL: env.MAIL }), messageBody({ subject: "Changed" }), "idempotency-key-once01"), (error) => {
+    return error.status === 409 && /different message/.test(error.message);
+  });
   assert.equal(calls, 1);
 });
 
 test("http send enforces auth, csrf, unsafe content, and an unconfigured worker", async () => {
-  resetSendLedger();
   let calls = 0;
   const fetcher = async () => {
     calls += 1;
@@ -407,7 +471,6 @@ test("http send enforces auth, csrf, unsafe content, and an unconfigured worker"
 });
 
 test("accepted send strips unsafe html and never uses a client from address", async () => {
-  resetSendLedger();
   let captured = null;
   const fetcher = async (url, init) => {
     captured = JSON.parse(init.body);
@@ -595,9 +658,11 @@ test("inbox page has compose, reply, and forward controls", async () => {
   assert.match(PAGE, /id="bcc-row" hidden/);
   assert.match(PAGE, /Discard this unsent message\?/);
   assert.match(PAGE, /not confirmed as delivered/);
+  assert.match(PAGE, /already in progress/);
   assert.match(PAGE, /Images were left out/);
 });
 
-test("claimSend rejects a short idempotency key before any work", () => {
-  assert.throws(() => claimSend("short", () => Promise.resolve({})), (error) => error.status === 400);
+test("submission ids are checked before a provider call", () => {
+  assert.throws(() => submissionId("short"), (error) => error.status === 400);
+  assert.equal(sendRecordKey(submissionId("idempotency-key-0001")), "outbound/sends/idempotency-key-0001.json");
 });

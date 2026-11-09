@@ -29,7 +29,7 @@ The key's `<ts>-<hash>` part is the **Message ID** shown in the inbox; `hash = s
 | `DELETE /api/message?key=<key>` | deletes `.eml` + matching status records (`dropped/`/`failed/`/`phishing/`/`spam/`) |
 | `GET /api/outbound` | whether sending is configured, and the permitted From address (no secrets) |
 | `GET /api/compose?key&mode` | reply, reply-all, or forward draft. Does not send. |
-| `POST /api/send` | same-origin send through Cloudflare Email Sending |
+| `POST /api/send` | same-origin send through Cloudflare Email Sending, after an atomic create of `outbound/sends/<id>.json` |
 
 Every request first passes `requireAccess` (no-op unless `ACCESS_TEAM_DOMAIN` + `ACCESS_AUD` are set).
 Delete and send also require a same-origin browser request. Send uses `MAIL_FROM` from the worker, never an address supplied by the browser. See [outbound.md](outbound.md).

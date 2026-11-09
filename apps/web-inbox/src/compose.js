@@ -451,6 +451,32 @@ export function normalizeOutgoing(input, settings) {
   };
 }
 
+function sortValue(value) {
+  if (Array.isArray(value)) return value.map(sortValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.keys(value).sort().map((key) => [key, sortValue(value[key])]));
+  }
+  return value;
+}
+
+export async function payloadHash(payload) {
+  const bytes = new TextEncoder().encode(JSON.stringify(sortValue(payload)));
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+export function submissionId(value) {
+  const id = String(value || "");
+  if (!/^[A-Za-z0-9_-]{16,80}$/.test(id)) {
+    throw httpError(400, "The send request is missing a valid idempotency key.");
+  }
+  return id;
+}
+
+export function sendRecordKey(id) {
+  return `outbound/sends/${id}.json`;
+}
+
 export function deliveryOutcome(result) {
   const list = (value) => (Array.isArray(value) ? value.map((item) => oneLine(item)).filter(Boolean) : []);
   const delivered = list(result && result.delivered);
@@ -471,55 +497,3 @@ export function deliveryOutcome(result) {
   };
 }
 
-const LEDGER_MAX = 200;
-const ledger = new Map();
-
-export function resetSendLedger() {
-  ledger.clear();
-}
-
-function remember(key, entry) {
-  ledger.set(key, entry);
-  while (ledger.size > LEDGER_MAX) {
-    const oldest = ledger.keys().next().value;
-    const item = ledger.get(oldest);
-    if (item && item.state === "inflight") break;
-    ledger.delete(oldest);
-  }
-}
-
-// One key is accepted once. A second call while the first is running shares that
-// attempt. A finished attempt is not sent again. An attempt that failed without
-// a clear rejection is not retried, because the provider may already have it.
-export function claimSend(key, run) {
-  if (!/^[A-Za-z0-9_-]{16,80}$/.test(String(key || ""))) {
-    throw httpError(400, "The send request is missing a valid idempotency key.");
-  }
-  const existing = ledger.get(key);
-  if (existing) {
-    if (existing.state === "inflight") return existing.promise;
-    if (existing.state === "done") return Promise.resolve({ ...existing.result, duplicate: true });
-    throw httpError(409, "A previous send with this request did not finish cleanly, so it was not tried again.");
-  }
-  let settle;
-  let fail;
-  const promise = new Promise((resolve, reject) => {
-    settle = resolve;
-    fail = reject;
-  });
-  const entry = { state: "inflight", promise };
-  remember(key, entry);
-  Promise.resolve()
-    .then(run)
-    .then((result) => {
-      entry.state = "done";
-      entry.result = result;
-      settle(result);
-    })
-    .catch((error) => {
-      if (error && error.ambiguous) entry.state = "ambiguous";
-      else ledger.delete(key);
-      fail(error);
-    });
-  return promise;
-}

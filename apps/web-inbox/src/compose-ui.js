@@ -237,6 +237,17 @@ if (composePanel && composeOpen) {
     statusEl.className = kind ? kind : "";
   }
 
+  function rememberSubmission(uncertain) {
+    try {
+      if (!window.sessionStorage || !compose.key) return;
+      window.sessionStorage.setItem("r2-inbox-outbound-submission", JSON.stringify({
+        key: compose.key,
+        uncertain: Boolean(uncertain),
+        status: statusEl.textContent,
+      }));
+    } catch (err) { /* private mode or a test page without storage */ }
+  }
+
   function showError(name, text) {
     const nodes = fieldNodes(name);
     nodes.error.hidden = !text;
@@ -643,14 +654,17 @@ if (composePanel && composeOpen) {
       const body = await readJson(response);
       const failed = body.outcome === "rejected";
       compose.sent = !failed;
+      compose.ambiguous = false;
       if (failed) compose.key = "";
       setStatus(outcomeText(body), failed ? "error" : "ok");
+      rememberSubmission(false);
       if (failed) sendButton.disabled = false;
     } catch (err) {
       const message = err.message || "Could not send.";
-      compose.ambiguous = /not retried|may already have been accepted/i.test(message);
+      compose.ambiguous = /not sent again|already in progress|did not finish|may already have been accepted/.test(message);
       if (!compose.ambiguous) compose.key = "";
       setStatus(message, "error");
+      rememberSubmission(compose.ambiguous);
       sendButton.disabled = compose.ambiguous;
     } finally {
       compose.sending = false;
@@ -734,6 +748,21 @@ if (composePanel && composeOpen) {
       event.returnValue = "";
     });
   }
+  try {
+    if (window.sessionStorage) {
+      const saved = JSON.parse(window.sessionStorage.getItem("r2-inbox-outbound-submission") || "null");
+      if (saved && saved.uncertain && saved.status) {
+        const search = document.getElementById("search");
+        const parent = search && search.parentNode;
+        if (parent && parent.insertBefore) {
+          const note = document.createElement("div");
+          note.className = "banner";
+          note.textContent = saved.status;
+          parent.insertBefore(note, search);
+        }
+      }
+    }
+  } catch (err) { /* storage or a partial document */ }
   const openMessageDirect = openMessage;
   openMessage = async function(key) {
     if (appEl.classList.contains("composing")) {

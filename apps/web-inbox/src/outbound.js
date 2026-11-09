@@ -5,11 +5,13 @@ import { openMessage } from "./store.js";
 import { httpError } from "./status.js";
 import {
   buildDraft,
-  claimSend,
   collectOwnAddresses,
   deliveryOutcome,
   normalizeOutgoing,
   oneLine,
+  payloadHash,
+  sendRecordKey,
+  submissionId,
 } from "./compose.js";
 
 const ACCOUNT_RE = /^[0-9a-f]{32}$/i;
@@ -118,15 +120,140 @@ export async function postToCloudflare(settings, payload, fetcher) {
   return deliveryOutcome(body.result);
 }
 
+function objectEtag(object) {
+  if (!object) return "";
+  return String(object.httpEtag || object.etag || "");
+}
+
+async function readRecord(bucket, key) {
+  const object = await bucket.get(key);
+  if (!object) return null;
+  let record;
+  if (typeof object.json === "function") record = await object.json();
+  else if (typeof object.text === "function") record = JSON.parse(await object.text());
+  else record = JSON.parse(new TextDecoder().decode(new Uint8Array(await object.arrayBuffer())));
+  return { record, etag: objectEtag(object) };
+}
+
+function sameHash(record, hash) {
+  return record && record.payloadHash === hash;
+}
+
+function conflict() {
+  return httpError(409, "This submission id was already used for a different message. Nothing was sent.");
+}
+
+function inProgress() {
+  const error = httpError(409, "This submission is already in progress, so it was not sent again.");
+  error.ambiguous = true;
+  return error;
+}
+
+function uncertain(message) {
+  const error = httpError(409, message);
+  error.ambiguous = true;
+  return error;
+}
+
+// The loser of the create does not call the provider. It only reports the stored state.
+async function replayClaim(bucket, key, hash) {
+  const loaded = await readRecord(bucket, key);
+  if (!loaded || !loaded.record) {
+    throw uncertain("The send claim could not be read, so nothing was sent again. It may already have been accepted.");
+  }
+  const { record } = loaded;
+  if (!sameHash(record, hash)) throw conflict();
+  if (record.state === "done" && record.outcome) return { ...record.outcome, duplicate: true };
+  if (record.state === "rejected") throw httpError(400, record.error || "Cloudflare rejected the message.");
+  if (record.state === "ambiguous") {
+    const detail = record.error || "It may already have been accepted.";
+    throw uncertain(`A previous send did not finish cleanly, so it was not sent again. ${detail}`);
+  }
+  throw inProgress();
+}
+
+// Update the claim only if it is still the object we created. A failed update is
+// not a reason to call the provider again.
+async function finishRecord(bucket, key, etag, record) {
+  const body = JSON.stringify(record);
+  let currentEtag = etag;
+  let lastFailure;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const stored = await bucket.put(key, body, {
+        onlyIf: { etagMatches: currentEtag },
+        httpMetadata: { contentType: "application/json" },
+      });
+      if (stored) return true;
+      const loaded = await readRecord(bucket, key);
+      if (loaded && sameHash(loaded.record, record.payloadHash) && loaded.record.state === record.state) return true;
+      if (loaded && loaded.record.state === "claiming" && sameHash(loaded.record, record.payloadHash) && loaded.etag && loaded.etag !== currentEtag) {
+        currentEtag = loaded.etag;
+        continue;
+      }
+      return false;
+    } catch (error) {
+      if (error && error.status) throw error;
+      lastFailure = error;
+    }
+  }
+  return !lastFailure && false;
+}
+
 export async function sendMessage(env, input, idempotencyKey, fetcher) {
   const settings = outboundSettings(env);
   if (!settings.configured) unconfigured(settings);
+  const id = submissionId(idempotencyKey);
+  const bucket = env.MAIL;
+  if (!bucket || typeof bucket.put !== "function" || typeof bucket.get !== "function") {
+    throw httpError(503, "Outbound mail cannot store a send claim (MAIL R2 put/get). Nothing was sent.");
+  }
   const send = typeof fetcher === "function"
     ? fetcher
     : (typeof env.EMAIL_FETCH === "function" ? env.EMAIL_FETCH : globalThis.fetch);
   const normalized = normalizeOutgoing(input, settings);
-  const result = await claimSend(idempotencyKey, () => postToCloudflare(settings, normalized.payload, send));
-  return { ...result, duplicate: Boolean(result.duplicate) };
+  const hash = await payloadHash(normalized.payload);
+  const key = sendRecordKey(id);
+  // Create-once. R2 evaluates etagDoesNotMatch: "*" (If-None-Match: *) atomically
+  // with the write, so two isolates cannot both observe success.
+  const created = await bucket.put(key, JSON.stringify({
+    v: 1,
+    id,
+    payloadHash: hash,
+    state: "claiming",
+    at: new Date().toISOString(),
+  }), {
+    onlyIf: { etagDoesNotMatch: "*" },
+    httpMetadata: { contentType: "application/json" },
+  });
+  if (!created) return replayClaim(bucket, key, hash);
+  const etag = objectEtag(created);
+  if (!etag) {
+    throw uncertain("The send claim did not return an etag, so nothing was sent again.");
+  }
+  try {
+    const outcome = await postToCloudflare(settings, normalized.payload, send);
+    await finishRecord(bucket, key, etag, {
+      v: 1,
+      id,
+      payloadHash: hash,
+      state: "done",
+      at: new Date().toISOString(),
+      outcome,
+    });
+    return outcome;
+  } catch (error) {
+    const ambiguous = Boolean(error && error.ambiguous);
+    await finishRecord(bucket, key, etag, {
+      v: 1,
+      id,
+      payloadHash: hash,
+      state: ambiguous ? "ambiguous" : "rejected",
+      at: new Date().toISOString(),
+      error: error instanceof Error ? error.message : "The send failed.",
+    });
+    throw error;
+  }
 }
 
 export async function composeDraft(env, bucket, key, mode, accessEmail) {

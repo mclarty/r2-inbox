@@ -69,6 +69,14 @@ node scripts/r2-inbox.mjs secrets
 
 If any of `MAIL_FROM`, `EMAIL_ACCOUNT_ID`, or `EMAIL_API_TOKEN` is missing, `POST /api/send` returns **503** and names what is missing. It does not pretend the message was sent.
 
+No extra binding is required. Claims use the existing `MAIL` R2 bucket at `outbound/sends/<submission-id>.json`. The object stores the submission id, a hash of the provider payload, and the state (`claiming`, `done`, `ambiguous`, or `rejected`). It does not store the message body. The final state is written with `onlyIf: { etagMatches }` so a delayed update cannot overwrite a newer record. Lifecycle rules in this repo do not cover that prefix; leave it that way.
+
+There is still a duplication window, and this code does not try to close it by sending again:
+
+- A new submission id is a new send. Reloading the page can mint a new id. The browser keeps an uncertain result in `sessionStorage` and shows it, but it will not block a different id.
+- If the isolate stops after Cloudflare accepts the message and before the record is updated, the object stays `claiming`. The same id is refused later. The message may already have been delivered. Nothing calls the provider to check.
+- If the isolate stops after the claim and before the provider call, the message was not sent, and the same id is still not retried. Deleting that object would allow another send; this worker never does that.
+
 ## Behaviour
 
 - Compose is a form in the inbox: To, a Cc/Bcc disclosure, subject, and a text editor with bold, italic, underline, lists, links, quotes, and undo/redo.
@@ -77,7 +85,9 @@ If any of `MAIL_FROM`, `EMAIL_ACCOUNT_ID`, or `EMAIL_API_TOKEN` is missing, `POS
 - Reply all adds the original To and Cc, drops your own addresses and duplicates, and never includes an original Bcc. Recipients stay editable. Send is manual.
 - Forward starts with empty recipients and one `Fwd:`. The quoted block includes From, Date, Subject, To, and Cc, not Bcc. `References` includes the original Message-ID. `In-Reply-To` is left off, because a forward is not a reply.
 - Attachments and inline images are not copied into the outgoing message. The draft says so when the original has attachments. Pasted images are dropped instead of being fetched.
-- The send button disables on click and sends an idempotency key. A repeat with the same key, in the same worker isolate, does not call Cloudflare again. A network failure or HTTP 408/429/5xx is not retried, because the message may already have been accepted. A clear 4xx rejection can be corrected and sent again.
+- The browser keeps one submission id for an attempt and the worker claims `outbound/sends/<id>.json` in the existing mail bucket **before** it calls Cloudflare. The claim is `put` with `onlyIf: { etagDoesNotMatch: "*" }`, which is If-None-Match `*`. R2 applies that condition atomically with the write: of two concurrent creates, at most one succeeds, and the other gets `null`. A later request with the same id reads the record and does not call the provider again. This holds across isolates and restarts because the record is in R2, not in worker memory.
+- A network failure or HTTP 408/429/5xx is stored as `ambiguous` and is not sent again. A `claiming` record (the provider call has not been recorded yet) is also not sent again. A clear 4xx is stored as `rejected`; repeating that same id does not call the provider. Changing the message and pressing Send uses a new id. The button stays disabled when the result is uncertain.
+- Do not add `outbound/` to lifecycle expiry. When a send record is deleted, that submission id can be used again.
 - Delete and send both require the existing Access check (when configured) and a same-origin request (`Origin` and `Sec-Fetch-Site`).
 
 ## Local mock

@@ -9,6 +9,7 @@ All notable changes to this project are documented here. The format follows
 - Optional outbound mail on the web inbox: compose, reply, reply all, and forward through Cloudflare Email Sending (`POST /accounts/{account_id}/email/sending/send`).
 - The From address and the API token come from worker configuration (`MAIL_FROM`, `EMAIL_API_TOKEN`, and related vars). Sending stays off, and says so, until they are set.
 - Cc and Bcc use the provider's recipient fields. Bcc is not copied into headers or reply drafts. See [docs/outbound.md](docs/outbound.md).
+- A submission id is claimed with an atomic R2 create (`etagDoesNotMatch: "*"`) on `outbound/sends/` before Cloudflare is called. Ambiguous and in-progress claims are not retried. The claim survives a new worker isolate.
 
 ## [0.1.0] - 2026-10-27
 
