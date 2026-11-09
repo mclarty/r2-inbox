@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
+import { parseFragment } from "parse5";
 import worker from "../src/index.js";
 import { resetCaches } from "../src/store.js";
 import {
@@ -17,7 +22,7 @@ import {
   withSubjectPrefix,
 } from "../src/compose.js";
 import { sendMessage } from "../src/outbound.js";
-import { activityLogUrl } from "../src/sent.js";
+import { activityLogUrl, trimTrailingSlashes } from "../src/sent.js";
 
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
 const TOKEN = "test-email-token-value";
@@ -175,6 +180,113 @@ test("outgoing html drops scripts, active urls, and remote images", () => {
   assert.doesNotMatch(clean, /tracker\.example/);
   assert.doesNotMatch(clean, /<img/i);
   assert.doesNotMatch(clean, /onerror/i);
+});
+
+const ATTACKS = [
+  "<ifr<iframe src=\"https://evil.example\">ame src=\"https://evil.example\" onload=\"alert(1)\">",
+  "<ifr<iframe>ame src=\"javascript:alert(1)\">",
+  "<sv<svg onload=\"alert(1)\">g onload=\"alert(2)\">",
+  "<svg onload=\"alert(1)\"><g>x</g></svg>",
+  "<script>alert(1)</script>",
+  "<scr<script>ipt>alert(1)</script>",
+  "<img src=\"https://tracker.example/p.png\" onerror=\"alert(1)\">",
+  "<form action=\"https://evil.example\"><input name=\"a\"></form>",
+  "<video src=\"https://evil.example/a.mp4\" onload=\"alert(1)\"></video>",
+  "<math><mi><iframe src=\"https://evil.example\"></iframe></mi></math>",
+  "<button formaction=\"javascript:alert(1)\">go</button>",
+  "<a href=\"javascript:alert(1)\" onclick=\"alert(1)\">click</a>",
+  "<p>Hello <b>there</b> <a href=\"https://example.com/ok\">ok</a></p><ul><li>One</li></ul>",
+];
+
+function domFacts(html) {
+  const tags = [];
+  const attrs = [];
+  const walk = (node) => {
+    if (node.nodeName && !node.nodeName.startsWith("#")) {
+      tags.push(node.nodeName);
+      for (const attr of node.attrs || []) attrs.push([node.nodeName, attr.name, attr.value]);
+    }
+    for (const child of node.childNodes || []) walk(child);
+  };
+  walk(parseFragment(String(html || "")));
+  return { tags, attrs };
+}
+
+function assertSafeDom(html) {
+  const { tags, attrs } = domFacts(html);
+  const banned = ["iframe", "script", "svg", "math", "form", "img", "image", "video", "audio", "object", "embed", "button", "input", "textarea", "select", "source", "canvas", "picture"];
+  assert.deepEqual(tags.filter((tag) => banned.includes(tag)), []);
+  for (const [tag, name, value] of attrs) {
+    assert.equal(name.startsWith("on"), false, `${tag} ${name}`);
+    assert.equal(/javascript:|vbscript:|data:text\/html/i.test(value), false, `${tag} ${name}=${value}`);
+  }
+  assert.equal(String(html).includes("<iframe"), false);
+  assert.equal(String(html).includes("<svg"), false);
+  assert.equal(String(html).includes("<script"), false);
+}
+
+test("split tags do not survive quoting or sending, and a browser parse stays inert", () => {
+  const formatted = ATTACKS[ATTACKS.length - 1];
+  for (const attack of ATTACKS) {
+    assertSafeDom(sanitizeOutgoingHtml(attack));
+    const view = {
+      subject: "Hello",
+      from_name: "Ada",
+      from_email: "ada@example.com",
+      to: [{ email: "you@example.com" }],
+      cc: [],
+      html: attack,
+      text: "",
+      headers: [{ name: "Message-ID", value: "<letter-1@example.com>" }],
+    };
+    assertSafeDom(buildDraft(view, "reply", ["you@example.com"]).html);
+    assertSafeDom(buildDraft(view, "forward", ["you@example.com"]).html);
+    try {
+      assertSafeDom(normalizeOutgoing({ to: ["ada@example.com"], subject: "Hi", html: attack }, settings()).payload.html);
+    } catch (error) {
+      assert.equal(error.status, 400);
+    }
+  }
+  const kept = domFacts(sanitizeOutgoingHtml(formatted));
+  assert.ok(kept.tags.includes("p") && kept.tags.includes("b") && kept.tags.includes("a") && kept.tags.includes("li"));
+  assert.equal(kept.attrs.some(([, name, value]) => name === "href" && value === "https://example.com/ok"), true);
+
+  const chrome = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((path) => existsSync(path));
+  if (!chrome) return;
+  const dir = mkdtempSync(join(tmpdir(), "sanitize-"));
+  const file = join(dir, "page.html");
+  const samples = ATTACKS.map((attack) => sanitizeOutgoingHtml(attack));
+  const payload = JSON.stringify(samples).replace(/</g, "\\u003c");
+  writeFileSync(file, `<!doctype html><meta charset="utf-8"><title>pending</title><div id="host"></div><script>
+window.__xss = 0;
+const host = document.getElementById("host");
+for (const html of ${payload}) {
+  const slot = document.createElement("div");
+  slot.innerHTML = html;
+  host.appendChild(slot);
+}
+const tags = [...host.querySelectorAll("*")].map((el) => el.tagName.toLowerCase());
+const active = [...host.querySelectorAll("*")].some((el) => [...el.attributes].some((attr) => attr.name.toLowerCase().startsWith("on") || /javascript:|vbscript:/i.test(attr.value)));
+const hrefs = [...host.querySelectorAll("a")].map((el) => el.getAttribute("href"));
+document.title = JSON.stringify({ xss: window.__xss, tags, active, hrefs });
+</script>`);
+  const dumped = execFileSync(chrome, [
+    "--headless=new",
+    "--disable-gpu",
+    "--no-sandbox",
+    "--virtual-time-budget=2000",
+    "--dump-dom",
+    file,
+  ], { encoding: "utf8", timeout: 20000, stdio: ["ignore", "pipe", "ignore"] });
+  const title = dumped.match(/<title>([^<]*)<\/title>/);
+  assert.ok(title, dumped.slice(0, 200));
+  const parsed = JSON.parse(title[1].replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+  assert.equal(parsed.xss, 0);
+  assert.equal(parsed.active, false);
+  const banned = ["iframe", "script", "svg", "math", "form", "img", "video", "object", "embed"];
+  assert.deepEqual(parsed.tags.filter((tag) => banned.includes(tag)), []);
+  assert.ok(parsed.hrefs.includes("https://example.com/ok"));
+  assert.ok(parsed.tags.includes("b"));
 });
 
 test("provider payload keeps bcc off headers and ignores a client from address", () => {
@@ -836,6 +948,14 @@ test("dashboard links encode the message id once and refuse a bad prefix", async
   assert.equal(activityLogUrl(base, "%3Cletter-1%40example.com%3E", account).url, "");
   assert.equal(activityLogUrl(base, "<id@example.com>\r\nBcc: x", account).url, "");
   assert.equal(activityLogUrl("javascript:alert(1)", id, account).url, "");
+  assert.equal(activityLogUrl(`${base}///`, id, account).url, `${base}/${encodeURIComponent(id)}`);
+  const started = Date.now();
+  const flooded = activityLogUrl(`${base}${"/".repeat(20000)}`, id, account);
+  assert.equal(flooded.url, "");
+  assert.equal(flooded.reason, "invalid");
+  assert.ok(Date.now() - started < 200, "slash trimming walked an over-long prefix");
+  assert.equal(trimTrailingSlashes(`${base}///`), base);
+  assert.equal(trimTrailingSlashes("/".repeat(3000)), null);
   const fetcher = async () => new Response(JSON.stringify({
     data: { viewer: { zones: [{ emailSendingAdaptive: [
       { datetime: "2026-11-09T20:05:00Z", from: "you@example.com", to: "ada@example.com", subject: "Hello", status: "delivered", messageId: id },

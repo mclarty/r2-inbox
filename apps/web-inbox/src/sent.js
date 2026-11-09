@@ -70,9 +70,23 @@ function redact(text, token) {
 
 const ACTIVITY_BASE_RE = /^\/[0-9a-f]{32}\/email-service\/sending\/[0-9a-f]{32}\/[0-9a-f]{32}\/activity-log$/i;
 const MESSAGE_ID_RE = /^<?[^<>\s/%\\?#]+@[^<>\s/%\\?#]+>?$/;
+const MAX_ACTIVITY_BASE = 2048;
+
+// Bound the walk before touching the characters. A longer value is rejected whole.
+export function trimTrailingSlashes(value) {
+  const text = String(value ?? "");
+  if (text.length > MAX_ACTIVITY_BASE) return null;
+  let start = 0;
+  let end = text.length;
+  while (start < end && text.charCodeAt(start) <= 32) start += 1;
+  while (end > start && text.charCodeAt(end - 1) <= 32) end -= 1;
+  while (end > start && text.charCodeAt(end - 1) === 47) end -= 1;
+  return text.slice(start, end);
+}
 
 export function activityLogUrl(base, messageId, accountId = "") {
-  const prefix = String(base || "").trim().replace(/\/+$/, "");
+  const prefix = trimTrailingSlashes(base);
+  if (prefix == null) return { url: "", reason: "invalid" };
   if (!prefix) return { url: "", reason: "missing" };
   let parsed;
   try {
@@ -83,7 +97,7 @@ export function activityLogUrl(base, messageId, accountId = "") {
   if (parsed.protocol !== "https:" || parsed.hostname !== "dash.cloudflare.com" || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash) {
     return { url: "", reason: "invalid" };
   }
-  const path = parsed.pathname.replace(/\/+$/, "");
+  const path = trimTrailingSlashes(parsed.pathname) || "";
   if (!ACTIVITY_BASE_RE.test(path)) return { url: "", reason: "invalid" };
   const account = path.split("/")[1] || "";
   const expected = oneLine(accountId).toLowerCase();

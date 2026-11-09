@@ -169,7 +169,8 @@ export function webInboxVars(cfg, accountId = "") {
     if (accountId) vars.EMAIL_ACCOUNT_ID = accountId;
   }
   if (cfg.outbound && cfg.outbound.zoneId) vars.EMAIL_ZONE_ID = cfg.outbound.zoneId;
-  if (cfg.outbound && cfg.outbound.activityLogBase) vars.EMAIL_ACTIVITY_LOG_BASE = String(cfg.outbound.activityLogBase).trim().replace(/\/+$/, "");
+  const activityBase = trimTrailingSlashes(cfg.outbound && cfg.outbound.activityLogBase);
+  if (activityBase) vars.EMAIL_ACTIVITY_LOG_BASE = activityBase;
   return vars;
 }
 
@@ -177,8 +178,20 @@ export function webInboxVars(cfg, accountId = "") {
 // prefix from a working dashboard page. The two middle ids are not interchangeable:
 // the sending API has a zone id and a separate subdomain tag, and the path order is
 // not published, so this value is stored whole rather than assembled.
+function trimTrailingSlashes(value) {
+  const text = String(value ?? "");
+  if (text.length > 2048) return null;
+  let start = 0;
+  let end = text.length;
+  while (start < end && text.charCodeAt(start) <= 32) start += 1;
+  while (end > start && text.charCodeAt(end - 1) <= 32) end -= 1;
+  while (end > start && text.charCodeAt(end - 1) === 47) end -= 1;
+  return text.slice(start, end);
+}
+
 export function activityLogBaseError(value) {
-  const prefix = String(value || "").trim().replace(/\/+$/, "");
+  const prefix = trimTrailingSlashes(value);
+  if (prefix == null) return "outbound.activityLogBase: must be at most 2048 characters";
   if (!prefix) return "";
   let url;
   try { url = new URL(prefix); }
@@ -186,7 +199,7 @@ export function activityLogBaseError(value) {
   if (url.protocol !== "https:" || url.hostname !== "dash.cloudflare.com" || url.username || url.password || url.port || url.search || url.hash) {
     return "outbound.activityLogBase: must be https://dash.cloudflare.com with no user, port, query, or hash";
   }
-  const path = url.pathname.replace(/\/+$/, "");
+  const path = trimTrailingSlashes(url.pathname) || "";
   if (!/^\/[0-9a-f]{32}\/email-service\/sending\/[0-9a-f]{32}\/[0-9a-f]{32}\/activity-log$/i.test(path)) {
     return "outbound.activityLogBase: expected /{account}/email-service/sending/{id}/{id}/activity-log";
   }

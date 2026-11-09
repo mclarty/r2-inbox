@@ -13,6 +13,7 @@ All notable changes to this project are documented here. The format follows
 - Compose and forward can attach files, within the documented 25 MiB Email Sending limit. Replies do not include the original files unless you add them. The claim hash covers attachment bytes.
 - Sent reads Email Sending activity (`emailSendingAdaptive`) for 31 days. It is metadata only: no message body and no attachment files.
 - A Sent item can open that message in the Cloudflare dashboard when `outbound.activityLogBase` is set. The link stays off until that prefix is configured.
+- Outgoing HTML is serialized from parser tags with plain names. Split tags such as `<ifr<iframe>` are not reassembled, and the dashboard prefix is trimmed without a slash-quantifying expression.
 
 ## [0.1.0] - 2026-10-27
 

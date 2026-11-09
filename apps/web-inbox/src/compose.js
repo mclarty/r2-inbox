@@ -3,7 +3,7 @@
 // only as a provider envelope field and is never copied into headers, quoted
 // text, or reply drafts.
 import { Parser } from "htmlparser2";
-import { escapeText, sanitizeHtml } from "./sanitize.js";
+import { escapeText, OUTGOING_DROP_TAGS, sanitizeHtml } from "./sanitize.js";
 import { httpError } from "./status.js";
 
 export const MAX_RECIPIENTS = 50;
@@ -113,10 +113,7 @@ export function collectOwnAddresses(env, accessEmail) {
 }
 
 export function sanitizeOutgoingHtml(html) {
-  const clean = sanitizeHtml(String(html || ""), {}, false);
-  return clean
-    .replace(/<img\b[^>]*>/gi, "")
-    .replace(/<\/?(?:video|audio|source|picture|svg|canvas|math|iframe|object|embed|form|input|button|textarea|select|option)\b[^>]*>/gi, "");
+  return sanitizeHtml(String(html || ""), {}, false, OUTGOING_DROP_TAGS);
 }
 
 export function htmlToPlain(html) {

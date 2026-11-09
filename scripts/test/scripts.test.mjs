@@ -96,6 +96,8 @@ test("activity log prefix must be a dash.cloudflare.com path and is masked", asy
   const base = `https://dash.cloudflare.com/${ACCOUNT}/email-service/sending/${left}/${right}/activity-log/`;
   assert.equal(activityLogBaseError(""), "");
   assert.equal(activityLogBaseError(base), "");
+  assert.equal(activityLogBaseError(`${base}///`), "");
+  assert.match(activityLogBaseError(`${base}${"/".repeat(3000)}`), /2048/);
   assert.match(activityLogBaseError("https://evil.example/activity-log"), /dash\.cloudflare\.com/);
   assert.match(activityLogBaseError(`${base}?x=1`), /query/);
   const file = cfgFile({ outbound: { enabled: true, from: "you@example.com", activityLogBase: base } });

@@ -36,6 +36,26 @@ const VOID_TAGS = new Set([
 ]);
 
 const TRANSPARENT_TAGS = new Set(["html", "head", "body"]);
+const TAG_NAME = /^[a-z][a-z0-9]*$/;
+const ATTR_NAME = /^[a-z][a-z0-9:-]*$/;
+
+// Tags removed from mail the user sends. The reader still uses the smaller DROP_TAGS set.
+export const OUTGOING_DROP_TAGS = [
+  "img",
+  "image",
+  "video",
+  "audio",
+  "source",
+  "picture",
+  "svg",
+  "canvas",
+  "math",
+  "input",
+  "button",
+  "textarea",
+  "select",
+  "option",
+];
 
 export function escapeText(value) {
   return String(value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -113,12 +133,13 @@ function resource(value, cidMap, allowRemote, markRemote) {
   return null;
 }
 
-export function sanitizeHtml(html, cidMap = {}, allowRemote = true) {
+export function sanitizeHtml(html, cidMap = {}, allowRemote = true, extraDrop = null) {
   try {
     const out = [];
     let dropDepth = 0;
     let inStyle = false;
     const markRemote = () => {};
+    const dropped = extraDrop ? new Set([...DROP_TAGS, ...extraDrop]) : DROP_TAGS;
 
     const attributes = (tag, attrs) => {
       const source = Object.entries(attrs || {}).map(([key, value]) => [key.toLowerCase(), value]);
@@ -130,7 +151,7 @@ export function sanitizeHtml(html, cidMap = {}, allowRemote = true) {
       }
       let rendered = "";
       for (const [key, value] of source) {
-        if (!key || key.startsWith("on") || key === "srcdoc" || key === "formaction") continue;
+        if (!ATTR_NAME.test(key) || key.startsWith("on") || key === "srcdoc" || key === "formaction") continue;
         if (value == null) {
           rendered += ` ${key}`;
           continue;
@@ -184,14 +205,18 @@ export function sanitizeHtml(html, cidMap = {}, allowRemote = true) {
 
     const parser = new Parser(
       {
-        onopentag(tag, attrs) {
-          tag = tag.toLowerCase();
-          const selfClosing = VOID_TAGS.has(tag);
+        onopentag(rawTag, attrs) {
+          const tag = String(rawTag || "").toLowerCase();
+          const safe = TAG_NAME.test(tag);
+          const selfClosing = safe && VOID_TAGS.has(tag);
           if (dropDepth) {
             if (!selfClosing) dropDepth += 1;
             return;
           }
-          if (DROP_TAGS.has(tag)) {
+          // Names htmlparser2 kept raw, such as "ifr<iframe", are not emitted.
+          // Their children are visited on their own, so a nested real tag is still dropped.
+          if (!safe) return;
+          if (dropped.has(tag)) {
             if (!selfClosing) dropDepth = 1;
             return;
           }
@@ -199,14 +224,18 @@ export function sanitizeHtml(html, cidMap = {}, allowRemote = true) {
           if (tag === "style") inStyle = true;
           out.push(`<${tag}${attributes(tag, attrs)}>`);
         },
-        onclosetag(tag) {
-          tag = tag.toLowerCase();
-          if (VOID_TAGS.has(tag)) return;
+        onclosetag(rawTag) {
+          const tag = String(rawTag || "").toLowerCase();
+          const safe = TAG_NAME.test(tag);
+          if (safe && VOID_TAGS.has(tag)) return;
           if (dropDepth) {
             dropDepth -= 1;
             return;
           }
-          if (DROP_TAGS.has(tag) || TRANSPARENT_TAGS.has(tag)) return;
+          if (!safe || dropped.has(tag) || TRANSPARENT_TAGS.has(tag)) {
+            if (tag === "style") inStyle = false;
+            return;
+          }
           if (tag === "style") inStyle = false;
           out.push(`</${tag}>`);
         },
@@ -219,10 +248,7 @@ export function sanitizeHtml(html, cidMap = {}, allowRemote = true) {
     );
     parser.write(String(html || ""));
     parser.end();
-    return out
-      .join("")
-      .replace(/<\s*script\b[^>]*>[\s\S]*?<\s*\/\s*script\s*>/gi, "")
-      .replace(/<\s*script\b[^>]*>/gi, "");
+    return out.join("");
   } catch {
     return `<pre>${escapeText(htmlToText(html))}</pre>`;
   }
