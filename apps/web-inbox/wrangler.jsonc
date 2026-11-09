@@ -10,7 +10,17 @@
   "vars": {
     "BUCKET_NAME": "my-mail-bucket",
     "ACCESS_TEAM_DOMAIN": "",
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "",
+    // Outbound mail stays off until these are set for real and EMAIL_API_TOKEN
+    // is installed with `wrangler secret put`. See docs/outbound.md.
+    // EMAIL_ACCOUNT_ID comes from $CLOUDFLARE_ACCOUNT_ID at deploy time.
+    "MAIL_FROM": "",
+    "MAIL_FROM_NAME": "",
+    "MAIL_REPLY_TO": "",
+    "MAIL_OWN_ADDRESSES": "",
+    "EMAIL_ZONE_ID": "",
+    // Copied dashboard activity-log prefix. Empty disables Open in Cloudflare.
+    "EMAIL_ACTIVITY_LOG_BASE": ""
   },
   "r2_buckets": [
     { "binding": "MAIL", "bucket_name": "my-mail-bucket" }

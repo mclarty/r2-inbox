@@ -75,5 +75,6 @@ Nothing here runs automatically. Each step is reversible until step 7.
 7. **Rollback** if needed: redeploy the previous version from the old repo (`wrangler deploy` there), or use
    `wrangler rollback` for the worker. Routing was never changed, so rollback is just a deploy.
 8. **Optional later:** let the scripts manage routing (`routing.mode`) and Access (`access.enabled`) once you're comfortable.
+9. **Outbound mail, still later and still not a cutover.** Follow [outbound.md](outbound.md): onboard the sending domain in the dashboard, create a separate Email Sending: Edit token, set `outbound` in the private config, deploy the web worker, and run `secrets` with `EMAIL_API_TOKEN` exported. Confirm a message to yourself shows queued or delivered in the inbox UI before you rely on it. Rolling back is `outbound.enabled: false` plus a web deploy. It does not touch routing or the bucket.
    If a rename is ever involved, run `scripts/routing.sh --force` and keep the old worker around for a few days
    (see README → Troubleshooting).

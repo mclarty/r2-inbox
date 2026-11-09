@@ -20,5 +20,14 @@
       "sessionDuration": "24h",
       "aud": ""
     }
+  },
+  "outbound": {
+    "enabled": false,
+    "from": "",
+    "fromName": "",
+    "replyTo": "",
+    "ownAddresses": [],
+    "zoneId": "",
+    "activityLogBase": ""
   }
 }

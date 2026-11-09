@@ -3,6 +3,8 @@ import { partResponseMeta } from "./mail.js";
 import { deleteMessage, messageBody, messagePart, openMessage, queryMessages } from "./store.js";
 import { httpError } from "./status.js";
 import { requireAccess } from "./access.js";
+import { assertSameOrigin, composeDraft, publicOutbound, readJsonBody, sendMessage } from "./outbound.js";
+import { listSent } from "./sent.js";
 
 function intArg(url, name, fallback, low, high) {
   const raw = (url.searchParams.get(name) || "").trim();
@@ -54,29 +56,27 @@ export default {
     try {
       return await route(request, env);
     } catch (error) {
-      const status = error && [400, 403, 404, 405, 415, 500].includes(error.status) ? error.status : 500;
+      const status = error && [400, 403, 404, 405, 409, 413, 415, 500, 502, 503].includes(error.status) ? error.status : 500;
       const message = error instanceof Error ? error.message : "Request failed.";
       return json({ error: message }, status);
     }
   },
 };
 
-// Cloudflare Access guards every request. On top of that, a delete has to be a
-// same-origin DELETE, so a page on another site cannot trigger one.
-function deleteRequest(request, url) {
-  const origin = request.headers.get("origin");
-  if (origin && origin !== url.origin) throw httpError(403, "Cross-site delete refused.");
-  const site = request.headers.get("sec-fetch-site");
-  if (site && site !== "same-origin") throw httpError(403, "Cross-site delete refused.");
+// Cloudflare Access guards every request. Mutations also have to be same-origin,
+// so a page on another site cannot delete mail or send through this inbox.
+function mutationRequest(request, url) {
+  assertSameOrigin(request, url);
   return url.searchParams.get("key") || "";
 }
 
 async function route(request, env) {
   const url = new URL(request.url);
   const path = url.pathname;
-  await requireAccess(request, env);
+  const access = await requireAccess(request, env);
   const method = request.method;
-  if (method === "DELETE" ? path !== "/api/message" : method !== "GET" && method !== "HEAD") {
+  const sending = method === "POST" && path === "/api/send";
+  if (method === "DELETE" ? path !== "/api/message" : sending ? false : method !== "GET" && method !== "HEAD") {
     throw httpError(405, "Method not allowed.");
   }
   if (path === "/") return html(PAGE);
@@ -92,9 +92,26 @@ async function route(request, env) {
     payload.bucket = env.BUCKET_NAME || "mail";
     return json(payload);
   }
+  if (path === "/api/outbound" && method === "GET") return json(publicOutbound(env));
+  if (path === "/api/sent" && method === "GET") {
+    const fetcher = typeof env.EMAIL_ANALYTICS_FETCH === "function" ? env.EMAIL_ANALYTICS_FETCH : fetch;
+    const before = (url.searchParams.get("before") || "").trim();
+    return json(await listSent(env, { before }, fetcher));
+  }
+  if (path === "/api/compose" && method === "GET") {
+    const key = url.searchParams.get("key") || "";
+    const mode = url.searchParams.get("mode") || "";
+    return json(await composeDraft(env, env.MAIL, key, mode, access && access.email));
+  }
   if (path === "/api/message" && request.method === "DELETE") {
-    const key = deleteRequest(request, url);
+    const key = mutationRequest(request, url);
     return json(await deleteMessage(env.MAIL, key));
+  }
+  if (sending) {
+    mutationRequest(request, url);
+    const idempotencyKey = request.headers.get("idempotency-key") || "";
+    const fetcher = typeof env.EMAIL_FETCH === "function" ? env.EMAIL_FETCH : fetch;
+    return json(await sendMessage(env, await readJsonBody(request), idempotencyKey, fetcher));
   }
   if (path === "/api/message" || path === "/body" || path === "/part") {
     const key = url.searchParams.get("key") || "";

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { writeFileSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { validateConfig, withDefaults, renderWrangler, loadConfig } from "../lib/config.mjs";
+import { activityLogBaseError, validateConfig, withDefaults, renderWrangler, loadConfig } from "../lib/config.mjs";
 import { createContext, redact } from "../lib/cf.mjs";
 import * as steps from "../lib/steps.mjs";
 import { main, parseArgs } from "../r2-inbox.mjs";
@@ -73,6 +73,46 @@ test("setup --dry-run: no network/spawn, prints plan, never prints secrets or ac
   for (const want of ["/r2/buckets", "/access/apps", "wrangler deploy", "secret put NOTIFY_URL", "/email/routing/dns", "rules/catch_all", "$CLOUDFLARE_API_TOKEN"]) {
     assert.ok(out.includes(want), want);
   }
+  assert.equal(out.includes("EMAIL_API_TOKEN"), false);
+});
+test("outbound mail renders sender vars, masks the account id, and installs only the send token", async () => {
+  const sendToken = "email-send-token-value";
+  const file = cfgFile({ outbound: { enabled: true, from: "you@example.com", fromName: "Example Inbox", replyTo: "you@example.com", ownAddresses: ["me@example.net"] } });
+  const env = { ...ENV, EMAIL_API_TOKEN: sendToken };
+  const { code, out } = await run(["setup", "--dry-run", "--config", file], { env });
+  assert.equal(code, 0);
+  assert.match(out, /"MAIL_FROM": "you@example.com"/);
+  assert.match(out, /"MAIL_OWN_ADDRESSES": "me@example.net"/);
+  assert.match(out, /"EMAIL_ACCOUNT_ID": "\$CLOUDFLARE_ACCOUNT_ID"/);
+  assert.match(out, /secret put EMAIL_API_TOKEN/);
+  assert.equal(out.includes(sendToken), false);
+  assert.equal(out.includes(ACCOUNT), false);
+  const off = await run(["secrets", "--dry-run", "--config", cfgFile()]);
+  assert.equal(off.out.includes("EMAIL_API_TOKEN"), false);
+});
+test("activity log prefix must be a dash.cloudflare.com path and is masked", async () => {
+  const left = "abc12345".repeat(4);
+  const right = "def67890".repeat(4);
+  const base = `https://dash.cloudflare.com/${ACCOUNT}/email-service/sending/${left}/${right}/activity-log/`;
+  assert.equal(activityLogBaseError(""), "");
+  assert.equal(activityLogBaseError(base), "");
+  assert.equal(activityLogBaseError(`${base}///`), "");
+  assert.match(activityLogBaseError(`${base}${"/".repeat(3000)}`), /2048/);
+  assert.match(activityLogBaseError("https://evil.example/activity-log"), /dash\.cloudflare\.com/);
+  assert.match(activityLogBaseError(`${base}?x=1`), /query/);
+  const file = cfgFile({ outbound: { enabled: true, from: "you@example.com", activityLogBase: base } });
+  const { code, out } = await run(["setup", "--dry-run", "--config", file], { env: { ...ENV, EMAIL_API_TOKEN: "email-send-token-value" } });
+  assert.equal(code, 0);
+  assert.match(out, /"EMAIL_ACTIVITY_LOG_BASE": "\$EMAIL_ACTIVITY_LOG_BASE"/);
+  assert.equal(out.includes(left), false);
+  assert.equal(out.includes(right), false);
+  assert.equal(out.includes(ACCOUNT), false);
+});
+test("outbound config requires a from address on the zone", () => {
+  const bad = validateConfig(withDefaults({ ...EXAMPLE, outbound: { enabled: true, from: "person@other.example" } }));
+  assert.ok(bad.some((line) => line.startsWith("outbound.from")));
+  const good = validateConfig(withDefaults({ ...EXAMPLE, outbound: { enabled: true, from: "you@example.com", ownAddresses: ["alias@example.net"] } }));
+  assert.deepEqual(good, []);
 });
 test("routing --dry-run in addresses mode creates one literal rule per address", async () => {
   const { out } = await run(["routing", "--dry-run", "--config", cfgFile({ routing: { mode: "addresses", addresses: ["you@example.com", "ops@example.com"] } })]);
@@ -143,7 +183,8 @@ test("droplist-sync rejects a malformed list before uploading", async () => {
 });
 test("lifecycle rules cover inbound/, dropped/, failed/", () => {
   assert.deepEqual(steps.lifecycleRules(30).map((r) => [r.conditions.prefix, r.deleteObjectsTransition.condition.maxAge]),
-    [["inbound/", 2592000], ["dropped/", 2592000], ["failed/", 2592000]]);
+    [["inbound/", 2592000], ["dropped/", 2592000], ["phishing/", 2592000], ["spam/", 2592000], ["failed/", 2592000]]);
+  assert.equal(steps.lifecycleRules(30).some((rule) => String(rule.conditions.prefix).startsWith("outbound")), false);
 });
 
 // ---- private overlay ----
