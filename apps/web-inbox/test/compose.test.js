@@ -251,7 +251,7 @@ test("split tags do not survive quoting or sending, and a browser parse stays in
   assert.ok(kept.tags.includes("p") && kept.tags.includes("b") && kept.tags.includes("a") && kept.tags.includes("li"));
   assert.equal(kept.attrs.some(([, name, value]) => name === "href" && value === "https://example.com/ok"), true);
 
-  const chrome = ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((path) => existsSync(path));
+  const chrome = process.env.CI ? "" : ["/usr/bin/google-chrome", "/usr/bin/chromium", "/usr/bin/chromium-browser"].find((path) => existsSync(path));
   if (!chrome) return;
   const dir = mkdtempSync(join(tmpdir(), "sanitize-"));
   const file = join(dir, "page.html");
