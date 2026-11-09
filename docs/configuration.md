@@ -31,6 +31,9 @@ Binding: R2 `INBOUND`.
 | `MAIL_OWN_ADDRESSES` | Comma-separated identities reply-all must skip. |
 | `EMAIL_ACCOUNT_ID` | Account id used in the Email Sending URL. Deploy copies `$CLOUDFLARE_ACCOUNT_ID` here. Not a secret, but not something to commit. |
 | `EMAIL_API_TOKEN` | **Secret.** API token with only Account → Email Sending → Edit. Installed by `secrets` when `outbound.enabled` is true. |
+| `EMAIL_ZONE_ID` | Zone id for Sent activity. From `outbound.zoneId`. Not required to send. |
+| `EMAIL_ANALYTICS_TOKEN` | **Secret.** Zone Analytics Read token for Sent. Separate from the send token. |
+| `EMAIL_ACTIVITY_LOG_BASE` | Optional dashboard activity-log prefix from `outbound.activityLogBase`. Empty disables Open in Cloudflare. |
 
 Binding: R2 `MAIL`.
 

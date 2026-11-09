@@ -12,6 +12,7 @@ All notable changes to this project are documented here. The format follows
 - A submission id is claimed with an atomic R2 create (`etagDoesNotMatch: "*"`) on `outbound/sends/` before Cloudflare is called. Ambiguous and in-progress claims are not retried. The claim survives a new worker isolate.
 - Compose and forward can attach files, within the documented 25 MiB Email Sending limit. Replies do not include the original files unless you add them. The claim hash covers attachment bytes.
 - Sent reads Email Sending activity (`emailSendingAdaptive`) for 31 days. It is metadata only: no message body and no attachment files.
+- A Sent item can open that message in the Cloudflare dashboard when `outbound.activityLogBase` is set. The link stays off until that prefix is configured.
 
 ## [0.1.0] - 2026-10-27
 

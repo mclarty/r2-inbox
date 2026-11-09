@@ -23,7 +23,7 @@ export const DEFAULTS = {
   },
   // Outbound mail is off until a deployment sets a permitted From address.
   // The API token stays in the environment (EMAIL_API_TOKEN), never in this file.
-  outbound: { enabled: false, from: "", fromName: "", replyTo: "", ownAddresses: [], zoneId: "" },
+  outbound: { enabled: false, from: "", fromName: "", replyTo: "", ownAddresses: [], zoneId: "", activityLogBase: "" },
 };
 
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
@@ -79,6 +79,8 @@ export function validateConfig(cfg) {
   if ((outbound.fromName || "").length > 120) e.push("outbound.fromName: at most 120 characters");
   if (outbound.replyTo && !EMAIL_RE.test(outbound.replyTo)) e.push("outbound.replyTo: must be an email address");
   if (outbound.zoneId && !/^[0-9a-f]{32}$/i.test(outbound.zoneId)) e.push("outbound.zoneId: 32-hex zone id, or empty");
+  const activityBaseError = activityLogBaseError(outbound.activityLogBase);
+  if (activityBaseError) e.push(activityBaseError);
   if (!arr(outbound.ownAddresses)) e.push("outbound.ownAddresses: array of email addresses");
   else for (const address of outbound.ownAddresses) if (!EMAIL_RE.test(address)) e.push(`outbound.ownAddresses: "${address}" is not an email address`);
   const onZone = (address) => {
@@ -167,7 +169,28 @@ export function webInboxVars(cfg, accountId = "") {
     if (accountId) vars.EMAIL_ACCOUNT_ID = accountId;
   }
   if (cfg.outbound && cfg.outbound.zoneId) vars.EMAIL_ZONE_ID = cfg.outbound.zoneId;
+  if (cfg.outbound && cfg.outbound.activityLogBase) vars.EMAIL_ACTIVITY_LOG_BASE = String(cfg.outbound.activityLogBase).trim().replace(/\/+$/, "");
   return vars;
+}
+
+// The dashboard activity-log URL is not documented as an API. The operator copies the
+// prefix from a working dashboard page. The two middle ids are not interchangeable:
+// the sending API has a zone id and a separate subdomain tag, and the path order is
+// not published, so this value is stored whole rather than assembled.
+export function activityLogBaseError(value) {
+  const prefix = String(value || "").trim().replace(/\/+$/, "");
+  if (!prefix) return "";
+  let url;
+  try { url = new URL(prefix); }
+  catch { return "outbound.activityLogBase: must be an https://dash.cloudflare.com activity-log prefix"; }
+  if (url.protocol !== "https:" || url.hostname !== "dash.cloudflare.com" || url.username || url.password || url.port || url.search || url.hash) {
+    return "outbound.activityLogBase: must be https://dash.cloudflare.com with no user, port, query, or hash";
+  }
+  const path = url.pathname.replace(/\/+$/, "");
+  if (!/^\/[0-9a-f]{32}\/email-service\/sending\/[0-9a-f]{32}\/[0-9a-f]{32}\/activity-log$/i.test(path)) {
+    return "outbound.activityLogBase: expected /{account}/email-service/sending/{id}/{id}/activity-log";
+  }
+  return "";
 }
 
 // Full wrangler config objects (rendered to apps/*/.wrangler.generated.json).

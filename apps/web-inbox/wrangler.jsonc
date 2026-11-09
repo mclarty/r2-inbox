@@ -18,7 +18,9 @@
     "MAIL_FROM_NAME": "",
     "MAIL_REPLY_TO": "",
     "MAIL_OWN_ADDRESSES": "",
-    "EMAIL_ZONE_ID": ""
+    "EMAIL_ZONE_ID": "",
+    // Copied dashboard activity-log prefix. Empty disables Open in Cloudflare.
+    "EMAIL_ACTIVITY_LOG_BASE": ""
   },
   "r2_buckets": [
     { "binding": "MAIL", "bucket_name": "my-mail-bucket" }

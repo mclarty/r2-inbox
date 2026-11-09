@@ -17,6 +17,7 @@ import {
   withSubjectPrefix,
 } from "../src/compose.js";
 import { sendMessage } from "../src/outbound.js";
+import { activityLogUrl } from "../src/sent.js";
 
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
 const TOKEN = "test-email-token-value";
@@ -666,6 +667,8 @@ test("inbox page has compose, reply, and forward controls", async () => {
   assert.match(PAGE, /not confirmed as delivered/);
   assert.match(PAGE, /already in progress/);
   assert.match(PAGE, /Use Add files/);
+  assert.match(PAGE, /Open in Cloudflare/);
+  assert.match(PAGE, /noopener noreferrer/);
   assert.match(PAGE, /id="show-sent"/);
 });
 
@@ -799,10 +802,58 @@ test("sent activity uses emailSendingAdaptive metadata and not routing events", 
   assert.equal(body.events[0].label, "Sent");
   assert.equal(body.events[1].label, "Delivered");
   assert.equal(body.events[1].pending, false);
+  assert.equal(body.dashboard.enabled, false);
+  assert.match(body.dashboard.reason, /activityLogBase/);
+  assert.equal(body.events[0].dashboard_url, "");
   assert.match(query, /emailSendingAdaptive/);
   assert.doesNotMatch(query, /emailRoutingAdaptive/);
   assert.equal(query.includes("analytics-token-value"), false);
   const older = await worker.fetch(new Request("https://inbox.example/api/sent?before=2026-11-09T20:00:00Z"), env);
   assert.equal(older.status, 200);
   assert.equal(variables.end, "2026-11-09T20:00:00.000Z");
+});
+
+test("dashboard links encode the message id once and refuse a bad prefix", async () => {
+  const account = "0123456789abcdef0123456789abcdef";
+  const left = "abc12345".repeat(4);
+  const right = "def67890".repeat(4);
+  assert.notEqual(left, account);
+  assert.notEqual(right, left);
+  const base = `https://dash.cloudflare.com/${account}/email-service/sending/${left}/${right}/activity-log`;
+  const id = "<letter-1@example.com>";
+  const linked = activityLogUrl(base, id, account);
+  assert.equal(linked.url, `${base}/${encodeURIComponent(id)}`);
+  assert.match(linked.url, /%3Cletter-1%40example\.com%3E$/);
+  assert.doesNotMatch(linked.url, /%253C|%2540|<letter-1@/);
+  assert.equal(activityLogUrl("", id, account).reason, "missing");
+  assert.equal(activityLogUrl("https://evil.example/activity-log", id, account).url, "");
+  assert.equal(activityLogUrl(`https://user:pass@dash.cloudflare.com/${account}/email-service/sending/${left}/${right}/activity-log`, id, account).url, "");
+  assert.equal(activityLogUrl(`${base}?next=/admin`, id, account).url, "");
+  assert.equal(activityLogUrl(`${base}#fragment`, id, account).url, "");
+  assert.equal(activityLogUrl(`https://dash.cloudflare.com/${left}/email-service/sending/${left}/${right}/activity-log`, id, account).reason, "account");
+  assert.equal(activityLogUrl(base, "<script>alert(1)</script>@example.com>", account).url, "");
+  assert.equal(activityLogUrl(base, "<id@example.com>/../secret", account).url, "");
+  assert.equal(activityLogUrl(base, "%3Cletter-1%40example.com%3E", account).url, "");
+  assert.equal(activityLogUrl(base, "<id@example.com>\r\nBcc: x", account).url, "");
+  assert.equal(activityLogUrl("javascript:alert(1)", id, account).url, "");
+  const fetcher = async () => new Response(JSON.stringify({
+    data: { viewer: { zones: [{ emailSendingAdaptive: [
+      { datetime: "2026-11-09T20:05:00Z", from: "you@example.com", to: "ada@example.com", subject: "Hello", status: "delivered", messageId: id },
+    ] }] } },
+  }), { status: 200, headers: { "content-type": "application/json" } });
+  const env = {
+    MAIL: conditionalBucket(),
+    EMAIL_ACCOUNT_ID: account,
+    EMAIL_ZONE_ID: account,
+    EMAIL_ANALYTICS_TOKEN: "analytics-token-value",
+    EMAIL_ACTIVITY_LOG_BASE: base,
+    EMAIL_ANALYTICS_FETCH: fetcher,
+  };
+  const linkedBody = await (await worker.fetch(new Request("https://inbox.example/api/sent"), env)).json();
+  assert.equal(linkedBody.dashboard.enabled, true);
+  assert.equal(linkedBody.events[0].dashboard_url, `${base}/%3Cletter-1%40example.com%3E`);
+  const blocked = await (await worker.fetch(new Request("https://inbox.example/api/sent"), { ...env, EMAIL_ACCOUNT_ID: left })).json();
+  assert.equal(blocked.dashboard.enabled, false);
+  assert.equal(blocked.events[0].dashboard_url, "");
+  assert.match(blocked.dashboard.reason, /does not match/);
 });

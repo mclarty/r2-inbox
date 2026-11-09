@@ -159,6 +159,7 @@ const env = {
   EMAIL_ACCOUNT_ID: ACCOUNT,
   EMAIL_API_TOKEN: "mock-email-token",
   EMAIL_ZONE_ID: ACCOUNT,
+  EMAIL_ACTIVITY_LOG_BASE: `https://dash.cloudflare.com/${ACCOUNT}/email-service/sending/${ACCOUNT}/${ACCOUNT}/activity-log`,
   EMAIL_ANALYTICS_TOKEN: "mock-analytics-token",
   async EMAIL_ANALYTICS_FETCH(url, init) {
     if (!String(url).endsWith("/graphql")) throw new Error("The mock mailbox blocked a non-analytics request.");

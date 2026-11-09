@@ -162,6 +162,9 @@ export function writeGenerated(ctx, cfg, app, extraVars = {}) {
     if (shown.vars && shown.vars.EMAIL_ZONE_ID) {
       shown.vars = { ...shown.vars, EMAIL_ZONE_ID: "$EMAIL_ZONE_ID" };
     }
+    if (shown.vars && shown.vars.EMAIL_ACTIVITY_LOG_BASE) {
+      shown.vars = { ...shown.vars, EMAIL_ACTIVITY_LOG_BASE: "$EMAIL_ACTIVITY_LOG_BASE" };
+    }
     let text = JSON.stringify(shown, null, 2);
     if (ctx.accountId) text = text.split(ctx.accountId).join("$CLOUDFLARE_ACCOUNT_ID");
     ctx.log(`[dry-run] would write ${file.slice(ROOT.length + 1)}:\n${text}`);

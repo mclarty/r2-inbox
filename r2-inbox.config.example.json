@@ -27,6 +27,7 @@
     "fromName": "",
     "replyTo": "",
     "ownAddresses": [],
-    "zoneId": ""
+    "zoneId": "",
+    "activityLogBase": ""
   }
 }

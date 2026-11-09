@@ -108,8 +108,12 @@ export const COMPOSE_STYLE = `
   .folder-nav button { border: 0; background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 10px; }
   .folder-nav button[aria-selected="true"] { background: var(--selected); color: var(--accent); font-weight: 650; }
   .file-row, .sent-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
-  .sent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line); }
+  .sent-item { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-bottom: 1px solid var(--line); }
+  .sent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; border: 0; }
   .sent-row span:nth-child(2) { grid-column: 1 / -1; }
+  .sent-open, #sent-dashboard { color: var(--accent); text-decoration: none; }
+  .sent-open { padding: 8px 12px 8px 0; font-size: 12px; }
+  #sent-dashboard { display: inline-flex; margin: 0 0 8px; font-size: 14px; }
   .file-row span, .sent-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-meta, .sent-meta { color: var(--muted); font-size: 12px; flex: none; }
   .file-add { display: inline-flex; margin-top: 8px; }
@@ -213,6 +217,7 @@ export const COMPOSE_PANEL = `<div id="compose" class="compose" role="dialog" ar
     <div id="sent-detail" hidden>
       <button id="sent-back" type="button">Back</button>
       <h2 id="sent-subject"></h2>
+      <a id="sent-dashboard" hidden>Open in Cloudflare</a>
       <p id="sent-note" class="compose-from"></p>
       <div id="sent-meta"></div>
     </div>`;
@@ -891,7 +896,15 @@ if (composePanel && composeOpen) {
       note.className = "status";
       note.textContent = data.note || "Metadata only.";
       listEl.appendChild(note);
+      if (data.dashboard && !data.dashboard.enabled && data.dashboard.reason) {
+        const off = document.createElement("div");
+        off.className = "status";
+        off.textContent = data.dashboard.reason;
+        listEl.appendChild(off);
+      }
       for (const event of data.events || []) {
+        const item = document.createElement("div");
+        item.className = "sent-item";
         const row = document.createElement("button");
         row.type = "button";
         row.className = "sent-row";
@@ -903,8 +916,20 @@ if (composePanel && composeOpen) {
         meta.className = "sent-meta";
         meta.textContent = sentLabel(event);
         row.append(who, subject, meta);
-        row.addEventListener("click", () => showSent(event, data.note));
-        listEl.appendChild(row);
+        row.addEventListener("click", () => showSent(event, data.note, data.dashboard));
+        item.appendChild(row);
+        const href = dashboardHref(event.dashboard_url);
+        if (href) {
+          const open = document.createElement("a");
+          open.className = "sent-open";
+          open.href = href;
+          open.target = "_blank";
+          open.rel = "noopener noreferrer";
+          open.textContent = "Open";
+          open.setAttribute("aria-label", "Open in Cloudflare");
+          item.appendChild(open);
+        }
+        listEl.appendChild(item);
       }
       if (!(data.events || []).length) {
         const empty = document.createElement("div");
@@ -929,7 +954,20 @@ if (composePanel && composeOpen) {
     }
   }
 
-  function showSent(event, note) {
+  function dashboardHref(value) {
+    if (typeof value !== "string" || !value.startsWith("https://dash.cloudflare.com/")) return "";
+    try {
+      const url = new URL(value);
+      if (url.protocol !== "https:" || url.hostname !== "dash.cloudflare.com" || url.username || url.password || url.port || url.search || url.hash) return "";
+      const activityPath = new RegExp("^/[0-9a-f]{32}/email-service/sending/[0-9a-f]{32}/[0-9a-f]{32}/activity-log/[^/]+$", "i");
+      if (!activityPath.test(url.pathname)) return "";
+      return url.href;
+    } catch (err) {
+      return "";
+    }
+  }
+
+  function showSent(event, note, dashboard) {
     document.getElementById("empty").hidden = true;
     document.getElementById("reading").hidden = true;
     composePanel.hidden = true;
@@ -937,7 +975,23 @@ if (composePanel && composeOpen) {
     panel.hidden = false;
     appEl.classList.add("reading-open");
     document.getElementById("sent-subject").textContent = event.subject || "(no subject)";
-    document.getElementById("sent-note").textContent = note || "";
+    const link = document.getElementById("sent-dashboard");
+    const href = dashboardHref(event.dashboard_url);
+    if (href && link) {
+      link.hidden = false;
+      link.href = href;
+      link.target = "_blank";
+      link.rel = "noopener noreferrer";
+      link.textContent = "Open in Cloudflare";
+    } else if (link) {
+      link.hidden = true;
+      link.removeAttribute("href");
+    }
+    const extra = href
+      ? ""
+      : (event.message_id ? "" : " This event has no Message-ID, so there is no dashboard link.");
+    const disabled = !href && dashboard && !dashboard.enabled ? " " + (dashboard.reason || "") : "";
+    document.getElementById("sent-note").textContent = (note || "") + extra + disabled;
     const meta = document.getElementById("sent-meta");
     meta.replaceChildren();
     const rows = [

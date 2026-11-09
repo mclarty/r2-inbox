@@ -68,6 +68,52 @@ function redact(text, token) {
   return out;
 }
 
+const ACTIVITY_BASE_RE = /^\/[0-9a-f]{32}\/email-service\/sending\/[0-9a-f]{32}\/[0-9a-f]{32}\/activity-log$/i;
+const MESSAGE_ID_RE = /^<?[^<>\s/%\\?#]+@[^<>\s/%\\?#]+>?$/;
+
+export function activityLogUrl(base, messageId, accountId = "") {
+  const prefix = String(base || "").trim().replace(/\/+$/, "");
+  if (!prefix) return { url: "", reason: "missing" };
+  let parsed;
+  try {
+    parsed = new URL(prefix);
+  } catch {
+    return { url: "", reason: "invalid" };
+  }
+  if (parsed.protocol !== "https:" || parsed.hostname !== "dash.cloudflare.com" || parsed.username || parsed.password || parsed.port || parsed.search || parsed.hash) {
+    return { url: "", reason: "invalid" };
+  }
+  const path = parsed.pathname.replace(/\/+$/, "");
+  if (!ACTIVITY_BASE_RE.test(path)) return { url: "", reason: "invalid" };
+  const account = path.split("/")[1] || "";
+  const expected = oneLine(accountId).toLowerCase();
+  if (expected && account.toLowerCase() !== expected) return { url: "", reason: "account" };
+  const id = String(messageId || "").trim();
+  if (!MESSAGE_ID_RE.test(id) || id.length > 998) return { url: "", reason: "message" };
+  return { url: `https://dash.cloudflare.com${path}/${encodeURIComponent(id)}`, reason: "" };
+}
+
+function dashboardState(env) {
+  const accountId = oneLine(env && env.EMAIL_ACCOUNT_ID);
+  const base = oneLine(env && env.EMAIL_ACTIVITY_LOG_BASE);
+  if (!base) {
+    return {
+      enabled: false,
+      base: "",
+      accountId,
+      reason: "Open in Cloudflare is off until outbound.activityLogBase is set to the dashboard activity-log prefix.",
+    };
+  }
+  const probe = activityLogUrl(base, "<probe@example.com>", accountId);
+  if (!probe.url) {
+    const reason = probe.reason === "account"
+      ? "Open in Cloudflare is off because the activity-log prefix account does not match EMAIL_ACCOUNT_ID."
+      : "Open in Cloudflare is off because outbound.activityLogBase is not an https://dash.cloudflare.com activity-log prefix.";
+    return { enabled: false, base: "", accountId, reason };
+  }
+  return { enabled: true, base, accountId, reason: "" };
+}
+
 export function mapSentEvent(event) {
   const status = sentStatus(event && event.status);
   return {
@@ -137,13 +183,19 @@ export async function listSent(env, { before, now = new Date() } = {}, fetcher =
   const zones = payload.data && payload.data.viewer && payload.data.viewer.zones;
   const events = (zones && zones[0] && zones[0].emailSendingAdaptive) || [];
   const mapped = events.map(mapSentEvent).filter((event) => event.datetime);
-  const oldest = mapped.length ? mapped[mapped.length - 1].datetime : "";
+  const dashboard = dashboardState(env);
+  const withLinks = mapped.map((event) => ({
+    ...event,
+    dashboard_url: dashboard.enabled ? activityLogUrl(dashboard.base, event.message_id, dashboard.accountId).url : "",
+  }));
+  const oldest = withLinks.length ? withLinks[withLinks.length - 1].datetime : "";
   return {
     source: "emailSendingAdaptive",
     retention_days: 31,
     content: "metadata-only",
-    note: "This is Email Sending activity for the last 31 days. Message bodies and attachment files are not included. The dashboard Email preview is separate and is not shown here.",
-    events: mapped,
-    next_before: mapped.length === 50 ? oldest : "",
+    note: "This is Email Sending activity for the last 31 days. Message bodies and attachment files are not included. Opening a dashboard link does not add a body preview; Cloudflare shows one only when Email preview was on for that send, for about seven days.",
+    dashboard: { enabled: dashboard.enabled, reason: dashboard.reason },
+    events: withLinks,
+    next_before: withLinks.length === 50 ? oldest : "",
   };
 }
