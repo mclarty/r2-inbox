@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
-    "test": "node --test test/access.test.js test/inbox.test.js",
+    "mock": "node scripts/mock-inbox.mjs",
+    "test": "node --test test/access.test.js test/inbox.test.js test/compose.test.js",
     "deploy": "wrangler deploy"
   },
   "dependencies": {
