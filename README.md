@@ -38,7 +38,7 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 - **Optional SMTP reject** for drop-listed senders (`rejectDropped`): the message is still stored and logged first, then refused with `550 5.7.1`. You can turn this off without a redeploy by setting `"reject_dropped": false` in the drop list. Recipient drops are never rejected.
 - **Authentication verdict** read only from Cloudflare's own topmost `Authentication-Results` header: `auth_verdict` (pass/fail/none), DKIM domain, SPF and DMARC results. It also sets `self_spoof_suspect` when mail claiming to come from your own domain isn't authenticated. Mail from your own domain is only exempt from the drop list when it is authenticated.
 - **Optional webhook** (`NOTIFY_URL` secret, with an optional `NOTIFY_AUTH` header): a small JSON payload with the R2 key. Transient errors (400/408/409/425/429/5xx and network errors) are retried with backoff. If delivery finally fails, a `failed/` record is written so you can retry it later. Set `UNSUBSCRIBE_ON_DROP=true` to also POST an `unsubscribe_request` when a droplist drop authenticates and the message exposes a List-Unsubscribe / one-click / body unsubscribe link (default off).
-- No forwarding and no outbound mail.
+- No automatic forwarding. Outbound mail is a separate, optional compose action on the web inbox.
 
 **Web inbox (`apps/web-inbox`)**
 - Message list built directly from R2. Search, paging, and a background refresh every 20 seconds.
@@ -46,6 +46,7 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 - **Headers view** with copy-to-clipboard. The **Message ID** (the stored file name) copies with one tap.
 - **Dropped / Failed / Phishing / Spam pills** come from the matching status prefixes (`dropped/`, `failed/`, `phishing/`, `spam/`). Opening the message shows the reason. **Unsubscribed** pills come from an optional `config/unsubscribed.json`.
 - **Delete**: `DELETE /api/message?key=<key>` removes the `.eml` and its status records. Only `inbound/YYYY/MM/DD/*.eml` keys are accepted, and only from same-origin requests.
+- **Compose, reply, reply all, and forward** when outbound mail is configured. The form has To, Cc, Bcc, a subject, and a basic editor. Send uses Cloudflare Email Sending as the configured From address. It stays off until you set that up, and a missing token is an error rather than a fake success. See [docs/outbound.md](docs/outbound.md).
 - **Auth**: Cloudflare Access at the edge. The Worker can also verify the Access JWT itself as a second layer (`ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`).
 
 **Tooling (`scripts/`)**
@@ -148,6 +149,11 @@ All deploy-time settings live in **`r2-inbox.config.json`** (copy it from `r2-in
 | `webInbox.access.allowEmails` | `[]` | Emails allowed by the Access policy. |
 | `webInbox.access.sessionDuration` | `"24h"` | Access session length. Keep it long so the 20-second refresh doesn't bounce you to the login page. |
 | `webInbox.access.aud` | `""` | Access AUD tag. `setup` prints it; save it here so plain `deploy` keeps the in-Worker JWT check on. → `ACCESS_AUD` |
+| `outbound.enabled` | `false` | Turn on compose/reply/forward. Off leaves the inbox receive-only. |
+| `outbound.from` | `""` | Permitted From address on `domain`. Required when outbound is enabled. → `MAIL_FROM` |
+| `outbound.fromName` | `""` | Optional display name. → `MAIL_FROM_NAME` |
+| `outbound.replyTo` | `""` | Optional Reply-To. → `MAIL_REPLY_TO` |
+| `outbound.ownAddresses` | `[]` | Addresses reply-all must skip, besides `from` and the Access user. → `MAIL_OWN_ADDRESSES` |
 
 Environment variables:
 
@@ -156,6 +162,7 @@ Environment variables:
 | `CLOUDFLARE_API_TOKEN` | all scripts, wrangler | Required. Never printed. |
 | `CLOUDFLARE_ACCOUNT_ID` | all scripts, wrangler | Required. Shown as `$CLOUDFLARE_ACCOUNT_ID` in dry-run output. |
 | `NOTIFY_URL`, `NOTIFY_AUTH` | `setup`, `secrets` | Optional webhook secrets, piped to `wrangler secret put` over stdin. |
+| `EMAIL_API_TOKEN` | `setup`, `secrets` | Optional Email Sending token for the web inbox. Used only when `outbound.enabled` is true. Piped to `wrangler secret put` over stdin. Not the deploy token. |
 | `R2_INBOX_CONFIG` | all scripts | Alternate config path. |
 | `R2_INBOX_PRIVATE_DIR` | all scripts | Private overlay dir; its `r2-inbox.config.json` is used when no `--config`/`R2_INBOX_CONFIG` is given. |
 
@@ -168,6 +175,7 @@ Create a **custom token** (My Profile → API Tokens → Create Custom Token) sc
 | Scope | Permission | Needed for |
 |---|---|---|
 | Account | **Workers Scripts: Edit** | deploying both workers, secrets, teardown |
+| Account | **Email Sending: Edit** | only for a separate token stored as `EMAIL_API_TOKEN` when outbound mail is enabled. Do not add this to the deploy token. |
 | Account | **Workers R2 Storage: Edit** | bucket create/check, r2.dev check, lifecycle, `droplist-sync`, `fetch-message` |
 | Account | **Access: Apps and Policies: Edit** | only if `webInbox.access.enabled` |
 | Zone | **Zone: Read** | finding the zone |
@@ -275,7 +283,7 @@ For personal volumes this usually costs **$0**:
 
 ## FAQ
 
-**Can it send or reply?** No. It only receives mail. Use your normal provider, or Cloudflare Email Sending, to send.
+**Can it send or reply?** Yes, when you turn on outbound mail. Compose, reply, reply all, and forward send through Cloudflare Email Sending as the From address in your private config. Setup is in [docs/outbound.md](docs/outbound.md). It does not forward inbound mail on its own, and it does not send anything until you press Send.
 
 **Does it forward to Gmail etc.?** No. Forwarding was deliberately left out. Add an Email Routing forward rule alongside it if you need one. Destination addresses have to be verified.
 

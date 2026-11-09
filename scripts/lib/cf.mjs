@@ -23,7 +23,7 @@ export function createContext({ dryRun = false, env = process.env, log = console
   spawn = spawnSync, yes = false, verbose = false } = {}) {
   const token = env.CLOUDFLARE_API_TOKEN || "";
   const accountId = env.CLOUDFLARE_ACCOUNT_ID || "";
-  const secrets = [token, env.NOTIFY_URL, env.NOTIFY_AUTH].filter(Boolean);
+  const secrets = [token, env.NOTIFY_URL, env.NOTIFY_AUTH, env.EMAIL_API_TOKEN].filter(Boolean);
   const out = (msg) => log(redact(dryRun ? String(msg).replace(/^done  /, "plan  ") : msg, secrets));
   const planned = [];
 

@@ -6,7 +6,11 @@ See README → Security model for the summary. Additional details:
   All `on*`, `srcdoc`, `formaction` attributes and `javascript:`, `vbscript:` and `data:text/html` URLs are removed; CSS is
   filtered. The body iframe sandbox omits `allow-scripts` and `allow-same-origin`, and the body response carries a
   restrictive CSP. Remote images can be blocked per message (tracking pixels).
-- **Threat: CSRF delete.** Same-origin DELETE only; key must match `^inbound/\d{4}/\d{2}/\d{2}/[^/]+\.eml$`.
+- **Threat: CSRF delete or send.** Same-origin DELETE and POST only. Delete keys must match `^inbound/\d{4}/\d{2}/\d{2}/[^/]+\.eml$`. Send also requires `Content-Type: application/json` and the same Access check as the rest of the inbox.
+- **Threat: open relay or sender impersonation.** `POST /api/send` is available only to someone who already passed Access. The From address is `MAIL_FROM` on the worker. A From, Reply-To, or Bcc header in the JSON body is ignored. Recipients are validated and capped at 50. The API token can only send (`Email Sending: Edit`) and is a Worker secret, separate from the deploy token.
+- **Threat: Bcc leak.** Bcc is sent only as the provider `bcc` field. It is not placed in custom headers, the plain or HTML body, logs, or reply/forward drafts. Original Bcc is not copied into reply-all.
+- **Threat: unsafe outgoing HTML.** Compose HTML is sanitized with the same allow-list as inbound mail, then images are removed so a pasted message cannot load a remote URL. Links must be `http`, `https`, or `mailto`.
+- **Threat: ambiguous send retried into a duplicate.** The provider is called once per idempotency key. Timeouts and HTTP 408/429/5xx are returned as a failure and are not tried again. A queued response is not described as delivered.
 - **Threat: exposed viewer.** Access at the edge, `workers_dev` off, optional JWT verification in the Worker
   (`requireAccess`, RS256 via team JWKS, audience/issuer/expiry checked, keys cached 10 minutes).
 - **Threat: spoofed "from me" mail driving automation.** Only Cloudflare's own Authentication-Results is trusted;

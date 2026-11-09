@@ -25,5 +25,13 @@ Binding: R2 `INBOUND`.
 | `BUCKET_NAME` | shown in the UI |
 | `ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com` |
 | `ACCESS_AUD` | Access application AUD; with the team domain enables JWT verification |
+| `MAIL_FROM` | Permitted From address when outbound mail is enabled. Empty leaves sending off. |
+| `MAIL_FROM_NAME` | Optional display name for that sender. |
+| `MAIL_REPLY_TO` | Optional Reply-To. The compose form cannot set a different one. |
+| `MAIL_OWN_ADDRESSES` | Comma-separated identities reply-all must skip. |
+| `EMAIL_ACCOUNT_ID` | Account id used in the Email Sending URL. Deploy copies `$CLOUDFLARE_ACCOUNT_ID` here. Not a secret, but not something to commit. |
+| `EMAIL_API_TOKEN` | **Secret.** API token with only Account → Email Sending → Edit. Installed by `secrets` when `outbound.enabled` is true. |
 
 Binding: R2 `MAIL`.
+
+Outbound mail is optional. See [outbound.md](outbound.md) for the private-config steps. The public example leaves it disabled.

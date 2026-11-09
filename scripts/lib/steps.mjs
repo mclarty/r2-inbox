@@ -156,7 +156,12 @@ export function writeGenerated(ctx, cfg, app, extraVars = {}) {
   if (ctx.dryRun) {
     // Print with the account id masked; nothing is written.
     const shown = { ...conf, ...(conf.account_id ? { account_id: "$CLOUDFLARE_ACCOUNT_ID" } : {}) };
-    ctx.log(`[dry-run] would write ${file.slice(ROOT.length + 1)}:\n${JSON.stringify(shown, null, 2)}`);
+    if (shown.vars && shown.vars.EMAIL_ACCOUNT_ID) {
+      shown.vars = { ...shown.vars, EMAIL_ACCOUNT_ID: "$CLOUDFLARE_ACCOUNT_ID" };
+    }
+    let text = JSON.stringify(shown, null, 2);
+    if (ctx.accountId) text = text.split(ctx.accountId).join("$CLOUDFLARE_ACCOUNT_ID");
+    ctx.log(`[dry-run] would write ${file.slice(ROOT.length + 1)}:\n${text}`);
   } else {
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, JSON.stringify(conf, null, 2) + "\n");
@@ -188,6 +193,7 @@ export function putSecrets(ctx, cfg) {
     ctx.log(cfg.deploy.keepVars
       ? "skip  NOTIFY_URL not provided; any NOTIFY_URL/NOTIFY_AUTH already on the worker (var or secret) is left as-is"
       : "skip  NOTIFY_URL not provided (no webhook; every message gets a failed/ notify_unset record)");
+    putOutboundSecret(ctx, cfg);
     return;
   }
   if (!/^https:\/\//.test(url)) throw new Error("NOTIFY_URL must start with https://");
@@ -195,6 +201,25 @@ export function putSecrets(ctx, cfg) {
   ctx.wrangler(["secret", "put", "NOTIFY_URL", "-c", GENERATED], { cwd: APP_DIR.email, input: url, inputLabel: "$NOTIFY_URL (hidden)" });
   if (auth) ctx.wrangler(["secret", "put", "NOTIFY_AUTH", "-c", GENERATED], { cwd: APP_DIR.email, input: auth, inputLabel: "$NOTIFY_AUTH (hidden)" });
   ctx.log("done  webhook secrets set" + (auth ? " (NOTIFY_URL, NOTIFY_AUTH)" : " (NOTIFY_URL)"));
+  putOutboundSecret(ctx, cfg);
+}
+
+// The sending token is a separate secret from the deploy token. It is piped on
+// stdin and only installed when outbound mail is explicitly enabled.
+function putOutboundSecret(ctx, cfg) {
+  if (!cfg.outbound || !cfg.outbound.enabled) return;
+  const token = ctx.env.EMAIL_API_TOKEN || "";
+  if (!token) {
+    ctx.log("warn  outbound mail is enabled but EMAIL_API_TOKEN is not set; the inbox refuses to send until you export it and run secrets");
+    return;
+  }
+  if (!ctx.dryRun) writeGenerated(ctx, cfg, "web");
+  ctx.wrangler(["secret", "put", "EMAIL_API_TOKEN", "-c", GENERATED], {
+    cwd: APP_DIR.web,
+    input: token,
+    inputLabel: "$EMAIL_API_TOKEN (hidden)",
+  });
+  ctx.log("done  outbound secret set (EMAIL_API_TOKEN)");
 }
 
 // ---------- drop list / fetch ----------

@@ -21,6 +21,9 @@ export const DEFAULTS = {
     hostname: "",
     access: { enabled: true, teamDomain: "", allowEmails: [], sessionDuration: "24h", aud: "" },
   },
+  // Outbound mail is off until a deployment sets a permitted From address.
+  // The API token stays in the environment (EMAIL_API_TOKEN), never in this file.
+  outbound: { enabled: false, from: "", fromName: "", replyTo: "", ownAddresses: [] },
 };
 
 const DOMAIN_RE = /^(?=.{1,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i;
@@ -69,6 +72,23 @@ export function validateConfig(cfg) {
   }
   if (typeof (cfg.deploy || {}).keepVars !== "boolean") e.push("deploy.keepVars: true or false");
   if (typeof (cfg.webInbox || {}).workersDev !== "boolean") e.push("webInbox.workersDev: true or false");
+  const outbound = cfg.outbound || {};
+  if (typeof outbound.enabled !== "boolean") e.push("outbound.enabled: true or false");
+  if (typeof outbound.fromName !== "string") e.push("outbound.fromName: string");
+  if (/[\u0000-\u001F\u007F]/.test(outbound.fromName || "")) e.push("outbound.fromName: cannot contain control characters");
+  if ((outbound.fromName || "").length > 120) e.push("outbound.fromName: at most 120 characters");
+  if (outbound.replyTo && !EMAIL_RE.test(outbound.replyTo)) e.push("outbound.replyTo: must be an email address");
+  if (!arr(outbound.ownAddresses)) e.push("outbound.ownAddresses: array of email addresses");
+  else for (const address of outbound.ownAddresses) if (!EMAIL_RE.test(address)) e.push(`outbound.ownAddresses: "${address}" is not an email address`);
+  const onZone = (address) => {
+    const domain = String(cfg.domain || "").toLowerCase();
+    const value = String(address || "").toLowerCase();
+    return value.endsWith("@" + domain) || value.endsWith("." + domain);
+  };
+  if (outbound.enabled) {
+    if (!EMAIL_RE.test(outbound.from || "")) e.push("outbound.from: an email address is required when outbound mail is enabled");
+    else if (!onZone(outbound.from)) e.push(`outbound.from: must be an address on ${cfg.domain}`);
+  } else if (outbound.from && !EMAIL_RE.test(outbound.from)) e.push("outbound.from: must be an email address");
   if (typeof cfg.privateDir !== "string") e.push("privateDir: string path");
   if (typeof cfg.rejectDropped !== "boolean") e.push("rejectDropped: true or false");
   const url = (cfg.webhook && cfg.webhook.url) || "";
@@ -131,13 +151,21 @@ export function emailWorkerVars(cfg) {
     REJECT_DROPPED: cfg.rejectDropped ? "true" : "false",
   };
 }
-export function webInboxVars(cfg) {
+export function webInboxVars(cfg, accountId = "") {
   const a = cfg.webInbox.access;
-  return {
+  const vars = {
     BUCKET_NAME: cfg.bucket,
     ACCESS_TEAM_DOMAIN: a.enabled ? a.teamDomain : "",
     ACCESS_AUD: a.enabled ? (a.aud || "") : "",
   };
+  if (cfg.outbound && cfg.outbound.enabled) {
+    vars.MAIL_FROM = cfg.outbound.from;
+    vars.MAIL_FROM_NAME = cfg.outbound.fromName || "";
+    vars.MAIL_REPLY_TO = cfg.outbound.replyTo || "";
+    vars.MAIL_OWN_ADDRESSES = (cfg.outbound.ownAddresses || []).join(",");
+    if (accountId) vars.EMAIL_ACCOUNT_ID = accountId;
+  }
+  return vars;
 }
 
 // Full wrangler config objects (rendered to apps/*/.wrangler.generated.json).
@@ -156,7 +184,7 @@ export function renderWrangler(cfg, app, accountId) {
     name: cfg.workers.web, main: "src/index.js", compatibility_date: "2026-10-13",
     ...(accountId ? { account_id: accountId } : {}),
     workers_dev: !!w.workersDev, preview_urls: false, keep_vars: !!cfg.deploy.keepVars,
-    vars: webInboxVars(cfg),
+    vars: webInboxVars(cfg, accountId),
     r2_buckets: [{ binding: "MAIL", bucket_name: cfg.bucket }],
     ...(w.hostname ? { routes: [{ pattern: w.hostname, custom_domain: true }] } : {}),
   };

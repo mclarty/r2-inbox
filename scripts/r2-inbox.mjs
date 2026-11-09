@@ -5,6 +5,7 @@
 //   CLOUDFLARE_API_TOKEN   API token (see README "API token permissions")
 //   CLOUDFLARE_ACCOUNT_ID  32-hex account id
 //   NOTIFY_URL, NOTIFY_AUTH  optional webhook secrets for the email worker
+//   EMAIL_API_TOKEN          optional Email Sending token for the web inbox (only if outbound is enabled)
 // Nothing secret is printed. --dry-run prints every API call / wrangler command instead of running it.
 import { createInterface } from "node:readline/promises";
 import { loadConfig } from "./lib/config.mjs";
@@ -21,7 +22,7 @@ Commands:
   setup              End to end: bucket, lifecycle, Email Routing + DNS, Access, deploy, secrets, routing rule
   deploy [email|web] Deploy both workers (or one)
   routing [--force]  Create/update the Email Routing rule(s) -> email worker (--force re-saves them)
-  secrets            Set NOTIFY_URL / NOTIFY_AUTH from the environment
+  secrets            Set NOTIFY_URL / NOTIFY_AUTH, and EMAIL_API_TOKEN when outbound mail is enabled
   access             Create/update the Cloudflare Access application for the web inbox
   droplist-sync [FILE] Validate FILE (default <privateDir>/droplist.json) and upload it as config/droplist.json
   overlay-sync       Upload <privateDir>/r2/config/*.json to the same R2 keys (validates droplist.json)

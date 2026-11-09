@@ -73,6 +73,28 @@ test("setup --dry-run: no network/spawn, prints plan, never prints secrets or ac
   for (const want of ["/r2/buckets", "/access/apps", "wrangler deploy", "secret put NOTIFY_URL", "/email/routing/dns", "rules/catch_all", "$CLOUDFLARE_API_TOKEN"]) {
     assert.ok(out.includes(want), want);
   }
+  assert.equal(out.includes("EMAIL_API_TOKEN"), false);
+});
+test("outbound mail renders sender vars, masks the account id, and installs only the send token", async () => {
+  const sendToken = "email-send-token-value";
+  const file = cfgFile({ outbound: { enabled: true, from: "you@example.com", fromName: "Example Inbox", replyTo: "you@example.com", ownAddresses: ["me@example.net"] } });
+  const env = { ...ENV, EMAIL_API_TOKEN: sendToken };
+  const { code, out } = await run(["setup", "--dry-run", "--config", file], { env });
+  assert.equal(code, 0);
+  assert.match(out, /"MAIL_FROM": "you@example.com"/);
+  assert.match(out, /"MAIL_OWN_ADDRESSES": "me@example.net"/);
+  assert.match(out, /"EMAIL_ACCOUNT_ID": "\$CLOUDFLARE_ACCOUNT_ID"/);
+  assert.match(out, /secret put EMAIL_API_TOKEN/);
+  assert.equal(out.includes(sendToken), false);
+  assert.equal(out.includes(ACCOUNT), false);
+  const off = await run(["secrets", "--dry-run", "--config", cfgFile()]);
+  assert.equal(off.out.includes("EMAIL_API_TOKEN"), false);
+});
+test("outbound config requires a from address on the zone", () => {
+  const bad = validateConfig(withDefaults({ ...EXAMPLE, outbound: { enabled: true, from: "person@other.example" } }));
+  assert.ok(bad.some((line) => line.startsWith("outbound.from")));
+  const good = validateConfig(withDefaults({ ...EXAMPLE, outbound: { enabled: true, from: "you@example.com", ownAddresses: ["alias@example.net"] } }));
+  assert.deepEqual(good, []);
 });
 test("routing --dry-run in addresses mode creates one literal rule per address", async () => {
   const { out } = await run(["routing", "--dry-run", "--config", cfgFile({ routing: { mode: "addresses", addresses: ["you@example.com", "ops@example.com"] } })]);
@@ -143,7 +165,7 @@ test("droplist-sync rejects a malformed list before uploading", async () => {
 });
 test("lifecycle rules cover inbound/, dropped/, failed/", () => {
   assert.deepEqual(steps.lifecycleRules(30).map((r) => [r.conditions.prefix, r.deleteObjectsTransition.condition.maxAge]),
-    [["inbound/", 2592000], ["dropped/", 2592000], ["failed/", 2592000]]);
+    [["inbound/", 2592000], ["dropped/", 2592000], ["phishing/", 2592000], ["spam/", 2592000], ["failed/", 2592000]]);
 });
 
 // ---- private overlay ----
