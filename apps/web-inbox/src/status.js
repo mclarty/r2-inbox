@@ -2,6 +2,8 @@ export const INBOX_PREFIX = "inbound/";
 
 export const STATUS_KINDS = [
   { id: "dropped", label: "Dropped", prefix: "dropped/" },
+  { id: "phishing", label: "Phishing", prefix: "phishing/" },
+  { id: "spam", label: "Spam", prefix: "spam/" },
   { id: "failed", label: "Failed", prefix: "failed/" },
 ];
 
@@ -22,7 +24,7 @@ export function statusExplanation(kind, payload) {
     }
     return error || reason || statusText(payload.message);
   }
-  for (const field of ["dropped", "reason", "error", "message", "detail"]) {
+  for (const field of ["phishing", "spam", "dropped", "reason", "error", "message", "detail"]) {
     const text = statusText(payload[field]);
     if (text) return text;
   }

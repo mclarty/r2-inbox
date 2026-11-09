@@ -37,14 +37,14 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 - **Drop list** stored in R2 (`config/droplist.json`): you can block by exact sender, by domain (with or without subdomains), or by a subject regex. It also supports allow exceptions and a `never_drop` list. Edits take effect within 5 minutes with no redeploy. If the list is missing or broken, the worker fails open and delivers the mail.
 - **Optional SMTP reject** for drop-listed senders (`rejectDropped`): the message is still stored and logged first, then refused with `550 5.7.1`. You can turn this off without a redeploy by setting `"reject_dropped": false` in the drop list. Recipient drops are never rejected.
 - **Authentication verdict** read only from Cloudflare's own topmost `Authentication-Results` header: `auth_verdict` (pass/fail/none), DKIM domain, SPF and DMARC results. It also sets `self_spoof_suspect` when mail claiming to come from your own domain isn't authenticated. Mail from your own domain is only exempt from the drop list when it is authenticated.
-- **Optional webhook** (`NOTIFY_URL` secret, with an optional `NOTIFY_AUTH` header): a small JSON payload with the R2 key. Transient errors (400/408/409/425/429/5xx and network errors) are retried with backoff. If delivery finally fails, a `failed/` record is written so you can retry it later.
+- **Optional webhook** (`NOTIFY_URL` secret, with an optional `NOTIFY_AUTH` header): a small JSON payload with the R2 key. Transient errors (400/408/409/425/429/5xx and network errors) are retried with backoff. If delivery finally fails, a `failed/` record is written so you can retry it later. Set `UNSUBSCRIBE_ON_DROP=true` to also POST an `unsubscribe_request` when a droplist drop authenticates and the message exposes a List-Unsubscribe / one-click / body unsubscribe link (default off).
 - No forwarding and no outbound mail.
 
 **Web inbox (`apps/web-inbox`)**
 - Message list built directly from R2. Search, paging, and a background refresh every 20 seconds.
 - Reader with **sanitized HTML** in a sandboxed iframe. Remote images can be toggled, and you can fall back to plain text. Attachments can be downloaded or viewed inline when that's safe, and SVG and other active types are always sandboxed.
 - **Headers view** with copy-to-clipboard. The **Message ID** (the stored file name) copies with one tap.
-- **Dropped / Failed pills** come from the `dropped/` and `failed/` records. Opening the message shows the reason. **Unsubscribed** pills come from an optional `config/unsubscribed.json`.
+- **Dropped / Failed / Phishing / Spam pills** come from the matching status prefixes (`dropped/`, `failed/`, `phishing/`, `spam/`). Opening the message shows the reason. **Unsubscribed** pills come from an optional `config/unsubscribed.json`.
 - **Delete**: `DELETE /api/message?key=<key>` removes the `.eml` and its status records. Only `inbound/YYYY/MM/DD/*.eml` keys are accepted, and only from same-origin requests.
 - **Auth**: Cloudflare Access at the edge. The Worker can also verify the Access JWT itself as a second layer (`ACCESS_TEAM_DOMAIN` + `ACCESS_AUD`).
 
@@ -57,7 +57,7 @@ you@example.com ──MX──▶ Cloudflare Email Routing ──▶ email-worke
 flowchart LR
   S["Sending MTA"] -->|"SMTP, MX"| ER["Cloudflare Email Routing<br/>catch-all or address rule"]
   ER -->|"Send to Worker (by name)"| EW["email-worker"]
-  EW -->|"put raw .eml"| R2[("R2 bucket, private<br/>inbound/ dropped/ failed/ config/")]
+  EW -->|"put raw .eml"| R2[("R2 bucket, private<br/>inbound/ dropped/ phishing/ spam/ failed/ config/")]
   EW -->|"get config/droplist.json<br/>cached 5 min"| R2
   EW -.->|"optional POST: key and auth verdict"| WH["Your webhook"]
   EW -.->|"setReject 550 5.7.1"| S
@@ -73,6 +73,8 @@ R2 layout:
 | `inbound/YYYY/MM/DD/<id>.eml` | email-worker | raw message (`message/rfc822`) |
 | `dropped/YYYY/MM/DD/<id>.json` | email-worker | `{dropped: rule, key, from, subject, date, messageId, at, rejected?}` |
 | `failed/YYYY/MM/DD/<id>.json` | email-worker | `{reason, error, key, ...payload fields, at}`: the webhook was not delivered |
+| `phishing/YYYY/MM/DD/<id>.json` | your tooling | optional category pill (red **Phishing**); does not replace `dropped/` |
+| `spam/YYYY/MM/DD/<id>.json` | your tooling | optional category pill (light-red **Spam**); does not replace `dropped/` |
 | `config/droplist.json` | you (`scripts/droplist-sync`) | drop list, see [docs/drop-lists.md](docs/drop-lists.md) |
 | `config/unsubscribed.json` | your tooling (optional) | drives the Unsubscribed pills |
 
@@ -135,7 +137,7 @@ All deploy-time settings live in **`r2-inbox.config.json`** (copy it from `r2-in
 | `neverDrop` | `[]` | Extra sender domains that are never dropped. → `NEVER_DROP` |
 | `rejectDropped` | `false` | Refuse drop-listed senders with `550 5.7.1` after archiving them. → `REJECT_DROPPED` |
 | `webhook.url` | `""` | Webhook URL. It's better to export `NOTIFY_URL` instead. Either way it's stored as a Worker **secret**, never as a var. |
-| `lifecycle.expireDays` | `0` | If > 0, `setup` adds R2 lifecycle rules that expire `inbound/`, `dropped/` and `failed/` after N days. **This replaces the bucket's lifecycle rules.** |
+| `lifecycle.expireDays` | `0` | If > 0, `setup` adds R2 lifecycle rules that expire `inbound/`, `dropped/`, `phishing/`, `spam/` and `failed/` after N days. **This replaces the bucket's lifecycle rules.** |
 | `privateDir` | `""` | Private overlay directory (outside the repo) holding `droplist.json` and `r2/config/*.json`. Relative paths resolve from the config file. Defaults to `$R2_INBOX_PRIVATE_DIR`. |
 | `deploy.keepVars` | `false` | Pass `keep_vars` to wrangler so dashboard-set vars survive a deploy (useful when you adopt existing workers). |
 | `webInbox.enabled` | `true` | Deploy the web inbox. |

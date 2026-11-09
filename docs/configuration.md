@@ -14,6 +14,7 @@ Worker vars; you can also set these directly when running the workers some other
 | `NOTIFY_RETRY_DELAYS_MS` | `0,5000,15000` | webhook attempt delays (max 10 attempts, each ≤ 120000) |
 | `NOTIFY_URL` *(secret)* | `https://…` | webhook endpoint |
 | `NOTIFY_AUTH` *(secret)* | `Bearer …` | sent as `Authorization` |
+| `UNSUBSCRIBE_ON_DROP` | `false` | when `true`/`1`/`on`, droplist drops that authenticate and expose an unsubscribe mechanism also POST an `unsubscribe_request` to the webhook (default **off**) |
 
 Binding: R2 `INBOUND`.
 

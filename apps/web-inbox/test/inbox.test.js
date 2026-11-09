@@ -159,6 +159,8 @@ test("status files map onto the inbound message", () => {
     "forward_failed: non-authenticated emails cannot be forwarded",
   );
   assert.equal(statusJsonKey("inbound/2026/10/13/new.eml", "failed/"), "failed/2026/10/13/new.json");
+  assert.equal(statusJsonKey("inbound/2026/11/08/x.eml", "phishing/"), "phishing/2026/11/08/x.json");
+  assert.equal(statusJsonKey("inbound/2026/11/08/x.eml", "spam/"), "spam/2026/11/08/x.json");
   assert.equal(emlKeyFromStatus("dropped/2024/01/01/old.json", "dropped/"), "inbound/2024/01/01/old.eml");
 });
 
@@ -538,7 +540,9 @@ test("unsubscribed.json marks the triggering email and later mail from that send
   const page = await get("/");
   assert.match(page.body, /\.pill\.unsubscribed \{/);
   assert.match(page.body, /\.pill\.unsubscribed-sender \{/);
-  assert.match(page.body, /"unsubscribed", "unsubscribed-sender"\]\.includes\(status\.id\)/);
+  assert.match(page.body, /\.pill\.phishing \{/);
+  assert.match(page.body, /\.pill\.spam \{/);
+  assert.match(page.body, /known = \["failed", "phishing", "spam", "unsubscribed", "unsubscribed-sender", "dropped"\]/);
   const fn = page.body.match(/function fillPills\(container, statuses\) \{[\s\S]*?\n\}\n/)[0];
   const box = { kids: [], replaceChildren() { this.kids = []; }, appendChild(el) { this.kids.push(el); } };
   const document = { createElement: () => ({}) };

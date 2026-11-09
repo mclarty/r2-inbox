@@ -7,6 +7,9 @@
 //  2. Drop mail whose envelope recipient does not match ACCEPT_RECIPIENTS (archived + dropped/ record).
 //  3. Check the drop list (R2 config/droplist.json, cached for DROPLIST_TTL_MS). A match is archived,
 //     logged under dropped/, and optionally refused at SMTP time (REJECT_DROPPED="true").
+//     When a droplist match is authenticated and has an unsubscribe mechanism, and the matched
+//     rule is not flagged no_unsubscribe, POST type=unsubscribe_request to the same NOTIFY_URL
+//     (deduped per sender via config/unsubscribed.json + config/unsubscribe-queued/).
 //  4. POST a small JSON notification to NOTIFY_URL (optional secret; NOTIFY_AUTH is sent as the
 //     Authorization header). Transient failures are retried; a final failure is recorded under failed/.
 // The webhook payload carries auth_verdict (pass/fail/none), dkim_domain, spf_result, dmarc_result and
@@ -230,6 +233,191 @@ export function retryDelays(env) {
   return v.length ? v.slice(0, 10) : DEFAULT_RETRY_DELAYS_MS;
 }
 
+
+export const UNSUBSCRIBED_KEY = "config/unsubscribed.json";
+export const UNSUBSCRIBE_QUEUED_PREFIX = "config/unsubscribe-queued/";
+export const BODY_SCAN_MAX = 512 * 1024;
+const UNSUB_URL_RE = /https?:\/\/[^\s<>"')\]]+/gi;
+const UNSUB_HINT_RE = /unsubscri|opt-?out|manage (your )?(email )?preferences/i;
+
+function decodeLatin1(buf, max) {
+  const bytes = new Uint8Array(buf instanceof ArrayBuffer ? buf : buf.buffer || buf);
+  const sub = bytes.subarray(0, Math.min(bytes.length, max));
+  let txt = "";
+  for (let i = 0; i < sub.length; i += 8192) txt += String.fromCharCode.apply(null, sub.subarray(i, i + 8192));
+  return txt;
+}
+
+function uniqUrls(list, limit = 20) {
+  const out = [], seen = new Set();
+  for (const u of list) {
+    const s = String(u || "").trim();
+    if (!s || seen.has(s)) continue;
+    seen.add(s); out.push(s.slice(0, 2000));
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// Scan List-Unsubscribe (+ Post) headers, then body anchors/URLs that look like unsubscribe/opt-out.
+export function findUnsubscribe(buf) {
+  const headers = rawHeaders(buf);
+  const lu = (headers.find(([n]) => n === "list-unsubscribe") || [])[1] || "";
+  const lup = (headers.find(([n]) => n === "list-unsubscribe-post") || [])[1] || "";
+  const uris = [...String(lu).matchAll(/<([^>]+)>/g)].map((m) => m[1].trim());
+  const https_urls = uniqUrls(uris.filter((u) => /^https:\/\//i.test(u)));
+  const mailto_urls = uniqUrls(uris.filter((u) => /^mailto:/i.test(u)));
+  const one_click = https_urls.length > 0 && /list-unsubscribe\s*=\s*one-click/i.test(String(lup).replace(/\s+/g, ""));
+  const body = decodeLatin1(buf, BODY_SCAN_MAX);
+  const body_urls = [];
+  for (const m of body.matchAll(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)) {
+    const href = m[1], txt = m[2].replace(/<[^>]+>/g, " ");
+    if (/^https?:\/\//i.test(href) && (UNSUB_HINT_RE.test(txt) || UNSUB_HINT_RE.test(href))) body_urls.push(href);
+  }
+  for (const m of body.matchAll(UNSUB_URL_RE)) {
+    if (UNSUB_HINT_RE.test(m[0])) body_urls.push(m[0].replace(/[.,;:]+$/, ""));
+  }
+  const body_unsubscribe_urls = uniqUrls(body_urls);
+  const found = !!(https_urls.length || mailto_urls.length || body_unsubscribe_urls.length);
+  return {
+    found,
+    list_unsubscribe: String(lu).slice(0, 1000),
+    list_unsubscribe_post: String(lup).slice(0, 200),
+    one_click,
+    https_urls,
+    mailto_urls,
+    body_unsubscribe_urls,
+  };
+}
+
+// True when the matched drop rule (or the From sender/domain entry) sets no_unsubscribe.
+export function dropNoUnsubscribe(list, rule, fromHeader) {
+  if (!list || !rule) return false;
+  const flagged = (e) => !!(e && (e.no_unsubscribe === true || e.no_unsubscribe === "true" || e.no_unsubscribe === 1));
+  if (rule.startsWith("sender:")) return flagged(list.senders.get(rule.slice(7)));
+  if (rule.startsWith("domain:")) {
+    const r = list.domains.get(rule.slice(7));
+    return flagged(r && r.e);
+  }
+  const addr = extractAddress(fromHeader);
+  if (addr && flagged(list.senders.get(addr))) return true;
+  const labels = (addr.split("@")[1] || "").split(".");
+  for (let i = 0; i < labels.length - 1; i++) {
+    const r = list.domains.get(labels.slice(i).join("."));
+    if (r && r.drop && flagged(r.e)) return true;
+  }
+  return false;
+}
+
+export function queuedKeyForSender(addr) {
+  const a = String(addr || "").trim().toLowerCase();
+  // Keep the object key path-safe and reversible enough for debugging.
+  return UNSUBSCRIBE_QUEUED_PREFIX + encodeURIComponent(a) + ".json";
+}
+
+export async function senderAlreadyHandled(env, addr) {
+  const a = String(addr || "").trim().toLowerCase();
+  if (!a) return "empty-sender";
+  try {
+    const q = await env.INBOUND.get(queuedKeyForSender(a));
+    if (q) return "queued";
+  } catch (err) { console.error("unsubscribe queued check failed", err && err.stack || err); }
+  try {
+    const obj = await env.INBOUND.get(UNSUBSCRIBED_KEY);
+    if (obj) {
+      const j = JSON.parse(await obj.text());
+      if (j && j.senders && j.senders[a]) return "unsubscribed:" + (j.senders[a].status || "known");
+    }
+  } catch (err) { console.error("unsubscribed.json check failed", err && err.stack || err); }
+  return null;
+}
+
+export async function markUnsubscribeQueued(env, addr, rec) {
+  const key = queuedKeyForSender(addr);
+  await env.INBOUND.put(key, JSON.stringify(rec), { httpMetadata: { contentType: "application/json" } });
+  return key;
+}
+
+export function unsubscribeNotifyEnabled(env) {
+  const v = String((env && env.UNSUBSCRIBE_ON_DROP) || "false").toLowerCase();
+  return v !== "false" && v !== "0" && v !== "off";
+}
+
+export async function postNotify(env, payload, delays) {
+  if (!env.NOTIFY_URL) return { ok: false, reason: "notify_unset", error: "" };
+  const headers = { "content-type": "application/json" };
+  if (env.NOTIFY_AUTH) headers["authorization"] = env.NOTIFY_AUTH;
+  const body = JSON.stringify(payload);
+  let reason = "notify_failed", error = "";
+  const d = delays || retryDelays(env);
+  for (let i = 0; i < d.length; i++) {
+    if (d[i]) await new Promise((res) => setTimeout(res, d[i]));
+    try {
+      const r = await fetch(env.NOTIFY_URL, { method: "POST", headers, body });
+      if (r.ok) return { ok: true, attempt: i + 1 };
+      reason = "notify_status"; error = String(r.status);
+      try { const t = (await r.text()).slice(0, 300); if (t) error += " " + t; } catch {}
+      if (![400, 408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
+    } catch (err) {
+      reason = "notify_failed"; error = String(err && err.message || err);
+    }
+  }
+  return { ok: false, reason, error };
+}
+
+// Fire-and-forget unsubscribe_request for authenticated droplist drops with a mechanism.
+export async function maybeNotifyUnsubscribe(env, { key, raw, meta, auth, rule, list, fromHeader }) {
+  try {
+    if (!unsubscribeNotifyEnabled(env)) return { skipped: "disabled" };
+    if (!raw || !key) return { skipped: "no-raw" };
+    if (!auth || auth.auth_verdict !== "pass" || auth.self_spoof_suspect) return { skipped: "auth" };
+    if (dropNoUnsubscribe(list, rule, fromHeader)) return { skipped: "no_unsubscribe" };
+    const fromAddr = extractAddress(fromHeader) || extractAddress(meta && meta.from);
+    if (!fromAddr) return { skipped: "no-from" };
+    const prior = await senderAlreadyHandled(env, fromAddr);
+    if (prior) return { skipped: prior };
+    const unsub = findUnsubscribe(raw);
+    if (!unsub.found) return { skipped: "no-mechanism" };
+    const payload = {
+      type: "unsubscribe_request",
+      r2_key: key,
+      key,
+      from: meta.from,
+      subject: meta.subject,
+      date: meta.date,
+      messageId: meta.messageId,
+      dropped: rule,
+      list_unsubscribe: unsub.list_unsubscribe,
+      list_unsubscribe_post: unsub.list_unsubscribe_post,
+      one_click: unsub.one_click,
+      https_urls: unsub.https_urls,
+      mailto_urls: unsub.mailto_urls,
+      body_unsubscribe_urls: unsub.body_unsubscribe_urls,
+      auth_verdict: auth.auth_verdict,
+      dkim_domain: auth.dkim_domain,
+      spf_result: auth.spf_result,
+      dmarc_result: auth.dmarc_result,
+      self_spoof_suspect: auth.self_spoof_suspect,
+    };
+    // Short retries: drop path should not linger; ctx.waitUntil covers the rest.
+    const result = await postNotify(env, payload, [0, 2000, 5000]);
+    if (!result.ok) {
+      console.error("unsubscribe webhook not delivered", result.reason, result.error, key);
+      return { skipped: "notify_failed", ...result };
+    }
+    try {
+      await markUnsubscribeQueued(env, fromAddr, {
+        status: "queued", from: fromAddr, key, dropped: rule, at: new Date().toISOString(), one_click: unsub.one_click,
+      });
+    } catch (err) { console.error("unsubscribe queued mark failed", err && err.stack || err); }
+    console.log("unsubscribe_request notified", fromAddr, key);
+    return { notified: true, from: fromAddr };
+  } catch (err) {
+    console.error("maybeNotifyUnsubscribe failed", err && err.stack || err);
+    return { skipped: "error", error: String(err && err.message || err) };
+  }
+}
+
 let cache = { at: 0, list: null };
 export function _resetDropListCache() { cache = { at: 0, list: null }; }
 
@@ -272,22 +460,24 @@ export default {
     };
 
     let key = null;
+    let rawBuf = null;
     let auth = { auth_verdict: "none", dkim_domain: "", spf_result: "", dmarc_result: "", from_domain: "", self_spoof_suspect: false };
     try {
       key = await buildKey(h.get("message-id"));
-      const raw = await new Response(message.raw).arrayBuffer();
-      try { auth = authVerdict(rawHeaders(raw)); }
+      rawBuf = await new Response(message.raw).arrayBuffer();
+      try { auth = authVerdict(rawHeaders(rawBuf)); }
       catch (err) { console.error("auth parse failed", err && err.stack || err);
         auth.self_spoof_suspect = isSelfDomain(extractAddress(h.get("from") || message.from).split("@")[1]); }
       const cm = { ...meta, auth: clip(`${auth.auth_verdict} d=${auth.dkim_domain} spf=${auth.spf_result} dmarc=${auth.dmarc_result}${auth.self_spoof_suspect ? " SPOOF" : ""}`).slice(0, 120) };
       if (JSON.stringify(cm).length > 1900) delete cm.auth; // R2 custom metadata limit is 2 KB
-      await env.INBOUND.put(key, raw, {
+      await env.INBOUND.put(key, rawBuf, {
         httpMetadata: { contentType: "message/rfc822" },
         customMetadata: cm,
       });
     } catch (err) {
       console.error("r2 archive failed", key, err && err.stack || err);
       key = null;
+      rawBuf = null;
     }
 
     // Recipient check (ACCEPT_RECIPIENTS).
@@ -331,6 +521,13 @@ export default {
         } catch (err) {
           console.error("dropped log failed", logKey, err && err.stack || err);
         }
+        // Auto-unsubscribe request for authenticated junk drops with a mechanism (deduped).
+        const unsubTask = maybeNotifyUnsubscribe(env, {
+          key, raw: rawBuf, meta, auth, rule, list,
+          fromHeader: h.get("from") || message.from,
+        });
+        if (ctx && typeof ctx.waitUntil === "function") ctx.waitUntil(unsubTask);
+        else await unsubTask;
         if (reject) {
           // Raw MIME is already in R2 (inbound/<key>) and the dropped/ record is written, so
           // tooling can still read List-Unsubscribe etc. Now refuse at SMTP time.
@@ -349,35 +546,12 @@ export default {
 
     // Webhook-only delivery: notify the consumer, which pulls the original from R2. There is no
     // forwarding. If the webhook fails, log it under failed/ so it can be swept and replayed.
-    let reason = "notify_unset", error = "";
-    if (env.NOTIFY_URL) {
-      try {
-        const headers = { "content-type": "application/json" };
-        if (env.NOTIFY_AUTH) headers["authorization"] = env.NOTIFY_AUTH;
-        const body = JSON.stringify({ key, from: meta.from, subject: meta.subject, date: meta.date, messageId: meta.messageId,
-          auth_verdict: auth.auth_verdict, dkim_domain: auth.dkim_domain, spf_result: auth.spf_result,
-          dmarc_result: auth.dmarc_result, self_spoof_suspect: auth.self_spoof_suspect });
-        // Webhook receivers may intermittently answers 400 (and could answer 409/429/5xx) when it is
-        // busy with an in-flight run. Retry transient statuses with backoff before giving up.
-        const delays = retryDelays(env);
-        for (let i = 0; i < delays.length; i++) {
-          if (delays[i]) await new Promise((res) => setTimeout(res, delays[i]));
-          try {
-            const r = await fetch(env.NOTIFY_URL, { method: "POST", headers, body });
-            if (r.ok) { console.log("notified", key, "attempt", i + 1); return; }
-            reason = "notify_status"; error = String(r.status);
-            try { const t = (await r.text()).slice(0, 300); if (t) error += " " + t; } catch {}
-            console.warn("notify attempt failed", i + 1, error, key);
-            if (![400, 408, 409, 425, 429, 500, 502, 503, 504].includes(r.status)) break;
-          } catch (err) {
-            reason = "notify_failed"; error = String(err && err.message || err);
-            console.warn("notify attempt threw", i + 1, error, key);
-          }
-        }
-      } catch (err) {
-        reason = "notify_failed"; error = String(err && err.message || err);
-      }
-    }
+    const inboundPayload = { key, from: meta.from, subject: meta.subject, date: meta.date, messageId: meta.messageId,
+      auth_verdict: auth.auth_verdict, dkim_domain: auth.dkim_domain, spf_result: auth.spf_result,
+      dmarc_result: auth.dmarc_result, self_spoof_suspect: auth.self_spoof_suspect };
+    const notified = await postNotify(env, inboundPayload, retryDelays(env));
+    if (notified.ok) { console.log("notified", key, "attempt", notified.attempt); return; }
+    const reason = notified.reason || "notify_unset", error = notified.error || "";
     console.error("webhook not delivered", reason, error, key);
     const failKey = "failed/" + key.slice("inbound/".length).replace(/\.eml$/, ".json");
     try {

@@ -40,7 +40,7 @@ export async function ensureBucket(ctx, cfg) {
 }
 
 export function lifecycleRules(days) {
-  return ["inbound/", "dropped/", "failed/"].map((prefix) => ({
+  return ["inbound/", "dropped/", "phishing/", "spam/", "failed/"].map((prefix) => ({
     id: `${RULE_TAG}-expire-${prefix.replace("/", "")}`,
     enabled: true,
     conditions: { prefix },
@@ -53,7 +53,7 @@ export async function ensureLifecycle(ctx, cfg) {
   const days = cfg.lifecycle.expireDays;
   if (!days) { ctx.log("skip  lifecycle (expireDays = 0, mail is kept until deleted)"); return; }
   await ctx.api("PUT", `${acct(ctx)}/r2/buckets/${cfg.bucket}/lifecycle`, { rules: lifecycleRules(days) });
-  ctx.log(`done  lifecycle: inbound/, dropped/, failed/ expire after ${days} days`);
+  ctx.log(`done  lifecycle: inbound/, dropped/, phishing/, spam/, failed/ expire after ${days} days`);
 }
 
 // ---------- Email Routing ----------
