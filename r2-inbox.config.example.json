@@ -26,6 +26,7 @@
     "from": "",
     "fromName": "",
     "replyTo": "",
-    "ownAddresses": []
+    "ownAddresses": [],
+    "zoneId": ""
   }
 }

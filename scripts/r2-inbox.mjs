@@ -6,6 +6,7 @@
 //   CLOUDFLARE_ACCOUNT_ID  32-hex account id
 //   NOTIFY_URL, NOTIFY_AUTH  optional webhook secrets for the email worker
 //   EMAIL_API_TOKEN          optional Email Sending token for the web inbox (only if outbound is enabled)
+//   EMAIL_ANALYTICS_TOKEN    optional Analytics Read token for the Sent activity view
 // Nothing secret is printed. --dry-run prints every API call / wrangler command instead of running it.
 import { createInterface } from "node:readline/promises";
 import { loadConfig } from "./lib/config.mjs";

@@ -158,6 +158,37 @@ const env = {
   MAIL_OWN_ADDRESSES: "me@example.net",
   EMAIL_ACCOUNT_ID: ACCOUNT,
   EMAIL_API_TOKEN: "mock-email-token",
+  EMAIL_ZONE_ID: ACCOUNT,
+  EMAIL_ANALYTICS_TOKEN: "mock-analytics-token",
+  async EMAIL_ANALYTICS_FETCH(url, init) {
+    if (!String(url).endsWith("/graphql")) throw new Error("The mock mailbox blocked a non-analytics request.");
+    const query = JSON.parse(init.body).query || "";
+    if (/emailRoutingAdaptive/.test(query)) throw new Error("The mock mailbox does not serve routing activity as sent mail.");
+    return new Response(JSON.stringify({
+      data: { viewer: { zones: [{ emailSendingAdaptive: [
+        {
+          datetime: "2026-11-09T18:00:00Z",
+          from: "Example Inbox <you@example.com>",
+          to: "ada@example.com",
+          envelopeTo: "ada@example.com",
+          subject: "Hello from the inbox",
+          status: "sent",
+          messageId: "<mock-message@example.com>",
+          spf: "pass",
+          dkim: "pass",
+          dmarc: "pass",
+        },
+        {
+          datetime: "2026-11-09T18:05:00Z",
+          from: "Example Inbox <you@example.com>",
+          to: "ada@example.com",
+          subject: "Hello from the inbox",
+          status: "delivered",
+          messageId: "<mock-message@example.com>",
+        },
+      ] }] } },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  },
   async EMAIL_FETCH(url, init) {
     if (!String(url).endsWith("/email/sending/send")) {
       throw new Error("The mock mailbox blocked a request that is not Email Sending.");

@@ -17,7 +17,8 @@
     "MAIL_FROM": "",
     "MAIL_FROM_NAME": "",
     "MAIL_REPLY_TO": "",
-    "MAIL_OWN_ADDRESSES": ""
+    "MAIL_OWN_ADDRESSES": "",
+    "EMAIL_ZONE_ID": ""
   },
   "r2_buckets": [
     { "binding": "MAIL", "bucket_name": "my-mail-bucket" }

@@ -163,6 +163,7 @@ Environment variables:
 | `CLOUDFLARE_ACCOUNT_ID` | all scripts, wrangler | Required. Shown as `$CLOUDFLARE_ACCOUNT_ID` in dry-run output. |
 | `NOTIFY_URL`, `NOTIFY_AUTH` | `setup`, `secrets` | Optional webhook secrets, piped to `wrangler secret put` over stdin. |
 | `EMAIL_API_TOKEN` | `setup`, `secrets` | Optional Email Sending token for the web inbox. Used only when `outbound.enabled` is true. Piped to `wrangler secret put` over stdin. Not the deploy token. |
+| `EMAIL_ANALYTICS_TOKEN` | `secrets` | Optional Analytics Read token for the Sent view. Piped to `wrangler secret put` over stdin. |
 | `R2_INBOX_CONFIG` | all scripts | Alternate config path. |
 | `R2_INBOX_PRIVATE_DIR` | all scripts | Private overlay dir; its `r2-inbox.config.json` is used when no `--config`/`R2_INBOX_CONFIG` is given. |
 
@@ -176,6 +177,7 @@ Create a **custom token** (My Profile → API Tokens → Create Custom Token) sc
 |---|---|---|
 | Account | **Workers Scripts: Edit** | deploying both workers, secrets, teardown |
 | Account | **Email Sending: Edit** | only for a separate token stored as `EMAIL_API_TOKEN` when outbound mail is enabled. Do not add this to the deploy token. |
+| Zone | **Analytics: Read** | only for a separate token stored as `EMAIL_ANALYTICS_TOKEN` when the Sent activity view is used. |
 | Account | **Workers R2 Storage: Edit** | bucket create/check, r2.dev check, lifecycle, `droplist-sync`, `fetch-message` |
 | Account | **Access: Apps and Policies: Edit** | only if `webInbox.access.enabled` |
 | Zone | **Zone: Read** | finding the zone |

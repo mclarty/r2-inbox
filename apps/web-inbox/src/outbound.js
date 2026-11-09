@@ -2,8 +2,9 @@
 // Cc and Bcc are first-class fields on that API. Bcc stays out of custom headers;
 // the header allowlist rejects a Bcc header anyway (E_HEADER_USE_API_FIELD).
 import { openMessage } from "./store.js";
-import { httpError } from "./status.js";
+import { cleanKey, httpError } from "./status.js";
 import {
+  attachmentFromBytes,
   buildDraft,
   collectOwnAddresses,
   deliveryOutcome,
@@ -211,7 +212,7 @@ export async function sendMessage(env, input, idempotencyKey, fetcher) {
   const send = typeof fetcher === "function"
     ? fetcher
     : (typeof env.EMAIL_FETCH === "function" ? env.EMAIL_FETCH : globalThis.fetch);
-  const normalized = normalizeOutgoing(input, settings);
+  const normalized = normalizeOutgoing(await withMaterializedAttachments(bucket, input), settings);
   const hash = await payloadHash(normalized.payload);
   const key = sendRecordKey(id);
   // Create-once. R2 evaluates etagDoesNotMatch: "*" (If-None-Match: *) atomically
@@ -256,6 +257,29 @@ export async function sendMessage(env, input, idempotencyKey, fetcher) {
   }
 }
 
+async function withMaterializedAttachments(bucket, input) {
+  const body = input && typeof input === "object" ? { ...input } : input;
+  if (!body || !Array.isArray(body.attachments)) return body;
+  const attachments = [];
+  for (const item of body.attachments) {
+    if (!item || typeof item !== "object") throw httpError(400, "An attachment is not valid.");
+    if (item.sourceKey != null || item.index != null) {
+      if (item.content) throw httpError(400, "An attachment cannot be both uploaded and copied from a message.");
+      const key = cleanKey(String(item.sourceKey || ""));
+      const index = item.index;
+      if (!Number.isInteger(index)) throw httpError(400, "That attachment is not in the message.");
+      const message = await openMessage(bucket, key);
+      const part = (message._view.parts || []).find((entry) => entry.index === index && !entry.inline);
+      if (!part) throw httpError(400, "That attachment is not in the message.");
+      attachments.push(attachmentFromBytes(part.filename, part.contentType, part.data));
+      continue;
+    }
+    attachments.push(item);
+  }
+  body.attachments = attachments;
+  return body;
+}
+
 export async function composeDraft(env, bucket, key, mode, accessEmail) {
   const message = await openMessage(bucket, key);
   const own = collectOwnAddresses(env, accessEmail);
@@ -275,9 +299,9 @@ export async function readJsonBody(request) {
     throw httpError(415, "Content-Type must be application/json.");
   }
   const declared = Number(request.headers.get("content-length") || 0);
-  if (Number.isFinite(declared) && declared > 300_000) throw httpError(413, "That message is too large.");
+  if (Number.isFinite(declared) && declared > 36_000_000) throw httpError(413, "That message is too large.");
   const text = await request.text();
-  if (text.length > 300_000) throw httpError(413, "That message is too large.");
+  if (text.length > 36_000_000) throw httpError(413, "That message is too large.");
   try {
     return JSON.parse(text);
   } catch {

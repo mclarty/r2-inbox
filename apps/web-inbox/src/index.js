@@ -4,6 +4,7 @@ import { deleteMessage, messageBody, messagePart, openMessage, queryMessages } f
 import { httpError } from "./status.js";
 import { requireAccess } from "./access.js";
 import { assertSameOrigin, composeDraft, publicOutbound, readJsonBody, sendMessage } from "./outbound.js";
+import { listSent } from "./sent.js";
 
 function intArg(url, name, fallback, low, high) {
   const raw = (url.searchParams.get(name) || "").trim();
@@ -92,6 +93,11 @@ async function route(request, env) {
     return json(payload);
   }
   if (path === "/api/outbound" && method === "GET") return json(publicOutbound(env));
+  if (path === "/api/sent" && method === "GET") {
+    const fetcher = typeof env.EMAIL_ANALYTICS_FETCH === "function" ? env.EMAIL_ANALYTICS_FETCH : fetch;
+    const before = (url.searchParams.get("before") || "").trim();
+    return json(await listSent(env, { before }, fetcher));
+  }
   if (path === "/api/compose" && method === "GET") {
     const key = url.searchParams.get("key") || "";
     const mode = url.searchParams.get("mode") || "";

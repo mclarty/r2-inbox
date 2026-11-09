@@ -331,11 +331,29 @@ function forwardedHeading(view) {
   return rows;
 }
 
-function attachmentWarning(view) {
-  const files = (view.parts || []).filter((part) => part && !part.inline).map((part) => part.filename).filter(Boolean);
+export const MAX_MESSAGE_BYTES = 25 * 1024 * 1024;
+
+function fileDescriptors(view) {
+  return (view.parts || []).filter((part) => part && !part.inline).map((part, index) => ({
+    index: Number.isInteger(part.index) ? part.index : index,
+    filename: part.filename || `attachment-${index + 1}`,
+    size: part.size || 0,
+    contentType: part.contentType || "application/octet-stream",
+  }));
+}
+
+function attachmentNote(view, mode) {
+  const files = fileDescriptors(view);
   if (!files.length && !view.has_attachments) return "";
-  if (!files.length) return "Attachments on the original message are not included.";
-  return `Attachments are not included: ${files.join(", ")}.`;
+  const names = files.map((file) => file.filename).join(", ");
+  if (mode === "forward") {
+    return names
+      ? `Original files are included until you remove them: ${names}.`
+      : "Original files are included until you remove them.";
+  }
+  return names
+    ? `Original files are not attached: ${names}. Add a file if you want to send one.`
+    : "Original files are not attached. Add a file if you want to send one.";
 }
 
 export function buildDraft(view, mode, own) {
@@ -345,8 +363,9 @@ export function buildDraft(view, mode, own) {
   const warnings = [];
   if (thread.trimmed) warnings.push("Older thread references were shortened to fit the sending provider's header limit.");
   if (!thread.messageId) warnings.push("This message has no Message-ID, so threading headers were left off.");
-  const files = attachmentWarning(view);
-  if (files) warnings.push(files);
+  const files = fileDescriptors(view);
+  const note = attachmentNote(view, kind);
+  if (note) warnings.push(note);
   const quote = quotedHtml(view);
   if (kind === "forward") {
     const heading = forwardedHeading(view);
@@ -360,6 +379,7 @@ export function buildDraft(view, mode, own) {
       html,
       inReplyTo: "",
       references: thread.messageId ? thread.references : [],
+      attachments: files,
       warnings,
     };
   }
@@ -375,6 +395,7 @@ export function buildDraft(view, mode, own) {
     html,
     inReplyTo: thread.messageId,
     references: thread.messageId ? thread.references : [],
+    attachments: [],
     warnings: [...warnings, ...recipients.warnings],
   };
 }
@@ -425,6 +446,7 @@ export function normalizeOutgoing(input, settings) {
   const inReplyTo = body.inReplyTo ? cleanIdList([body.inReplyTo])[0] || "" : "";
   const references = body.references ? cleanIdList(body.references) : [];
   if (inReplyTo && !references.includes(inReplyTo)) references.push(inReplyTo);
+  const attachments = normalizeAttachments(body.attachments);
   const fromName = oneLine(settings.fromName).replace(/[<>"]/g, "").slice(0, 120);
   const payload = {
     from: fromName ? { address: settings.from, name: fromName } : settings.from,
@@ -440,6 +462,18 @@ export function normalizeOutgoing(input, settings) {
   if (inReplyTo) headers["In-Reply-To"] = inReplyTo;
   if (references.length) headers.References = references.join(" ");
   if (Object.keys(headers).length) payload.headers = headers;
+  const messageBytes = utf8Size(subject) + utf8Size(html) + utf8Size(text) + attachments.reduce((sum, file) => sum + file.size, 0);
+  if (messageBytes > MAX_MESSAGE_BYTES) {
+    throw httpError(413, "That message is larger than the 25 MiB Email Sending limit, including attachments.");
+  }
+  if (attachments.length) {
+    payload.attachments = attachments.map((file) => ({
+      content: file.content,
+      filename: file.filename,
+      type: file.type,
+      disposition: "attachment",
+    }));
+  }
   return {
     payload,
     summary: {
@@ -449,6 +483,69 @@ export function normalizeOutgoing(input, settings) {
       subject,
     },
   };
+}
+
+const MIME_RE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
+
+function utf8Size(value) {
+  return new TextEncoder().encode(String(value || "")).byteLength;
+}
+
+export function safeFilename(name) {
+  const base = String(name || "").split(/[/\\]/).pop().replace(/[\u0000-\u001F\u007F]/g, "").replace(/[<>:"|?*]/g, "").trim();
+  if (!base || base === "." || base === ".." || base.length > 180) {
+    throw httpError(400, "That file name is not allowed.");
+  }
+  return base;
+}
+
+export function safeMime(type) {
+  const value = String(type || "application/octet-stream").toLowerCase().split(";")[0].trim();
+  if (!MIME_RE.test(value)) throw httpError(400, "That attachment type is not allowed.");
+  return value;
+}
+
+export function decodeBase64(content) {
+  const raw = String(content || "").replace(/\s/g, "");
+  if (!raw || raw.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(raw)) {
+    throw httpError(400, "An attachment is not valid base64.");
+  }
+  const binary = atob(raw);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return { bytes, base64: raw };
+}
+
+export function attachmentFromBytes(filename, type, bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes || []);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < data.length; i += chunk) {
+    binary += String.fromCharCode(...data.subarray(i, i + chunk));
+  }
+  return {
+    filename: safeFilename(filename),
+    type: safeMime(type),
+    content: btoa(binary),
+    size: data.byteLength,
+  };
+}
+
+function normalizeAttachments(value) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) throw httpError(400, "Attachments must be a list.");
+  return value.map((item) => {
+    if (!item || typeof item !== "object" || typeof item.content !== "string") {
+      throw httpError(400, "An attachment is missing its contents.");
+    }
+    const decoded = decodeBase64(item.content);
+    return {
+      filename: safeFilename(item.filename),
+      type: safeMime(item.type || item.contentType),
+      content: decoded.base64,
+      size: decoded.bytes.byteLength,
+    };
+  });
 }
 
 function sortValue(value) {

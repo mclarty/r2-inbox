@@ -271,7 +271,8 @@ test("reply and forward drafts thread, quote safely, and never reveal bcc", () =
   assert.match(reply.html, /On Tue, 13 Oct 2026 15:04:00 -0500, Ada &lt;ada@example.com&gt; wrote:/);
   assert.match(reply.html, /the café/);
   assert.doesNotMatch(reply.html, /script|tracker\.example|hidden@example\.net/i);
-  assert.match(reply.warnings.join(" "), /notes\.pdf/);
+  assert.match(reply.warnings.join(" "), /not attached/);
+  assert.deepEqual(reply.attachments, []);
 
   const forward = buildDraft({ ...view, subject: "Fw: Fw: Café menu" }, "forward", ["you@example.com"]);
   assert.equal(forward.subject, "Fwd: Café menu");
@@ -284,6 +285,8 @@ test("reply and forward drafts thread, quote safely, and never reveal bcc", () =
   assert.match(forward.html, /To: You &lt;you@example.com&gt;/);
   assert.match(forward.html, /Cc: Pat &lt;pat@example.com&gt;/);
   assert.doesNotMatch(forward.html, /Bcc|hidden@example\.net|tracker\.example|script/i);
+  assert.equal(forward.attachments[0].filename, "notes.pdf");
+  assert.match(forward.warnings.join(" "), /remove/);
 
   const textOnly = buildDraft({
     subject: "Привет",
@@ -621,7 +624,8 @@ test("draft endpoint quotes multipart, text, and html originals without sending"
   assert.match(reply.html, /Rich/);
   assert.match(reply.html, /café/);
   assert.doesNotMatch(JSON.stringify(reply), /hidden@example\.net|tracker\.example|<script/i);
-  assert.match(reply.warnings.join(" "), /notes\.pdf/);
+  assert.match(reply.warnings.join(" "), /not attached/);
+  assert.deepEqual(reply.attachments, []);
 
   const all = await load("inbound/2026/10/13/rich.eml", "reply-all");
   assert.deepEqual(all.to.map((item) => item.email), ["replies@example.com"]);
@@ -634,6 +638,8 @@ test("draft endpoint quotes multipart, text, and html originals without sending"
   assert.deepEqual(forward.to, []);
   assert.match(forward.html, /Forwarded message/);
   assert.doesNotMatch(forward.html, /hidden@example\.net/);
+  assert.equal(forward.attachments[0].filename, "notes.pdf");
+  assert.equal(JSON.stringify(forward).includes("JVBERi"), false);
 
   const plain = await load("inbound/2026/10/14/text.eml", "reply");
   assert.equal(plain.subject, "Re: Привет");
@@ -659,10 +665,144 @@ test("inbox page has compose, reply, and forward controls", async () => {
   assert.match(PAGE, /Discard this unsent message\?/);
   assert.match(PAGE, /not confirmed as delivered/);
   assert.match(PAGE, /already in progress/);
-  assert.match(PAGE, /Images were left out/);
+  assert.match(PAGE, /Use Add files/);
+  assert.match(PAGE, /id="show-sent"/);
 });
 
 test("submission ids are checked before a provider call", () => {
   assert.throws(() => submissionId("short"), (error) => error.status === 400);
   assert.equal(sendRecordKey(submissionId("idempotency-key-0001")), "outbound/sends/idempotency-key-0001.json");
+});
+
+function withClaims(base) {
+  const claims = conditionalBucket();
+  return {
+    objects: claims.objects,
+    async list(options) { return base.list(options); },
+    async get(key) {
+      if (String(key).startsWith("outbound/")) return claims.get(key);
+      return base.get(key);
+    },
+    async head(key) { return base.head ? base.head(key) : null; },
+    async put(key, value, options) {
+      if (!String(key).startsWith("outbound/")) throw new Error("refusing to store " + key);
+      return claims.put(key, value, options);
+    },
+  };
+}
+
+test("forward can keep an original file, reply does not, and a changed file conflicts", async () => {
+  let calls = 0;
+  let captured = null;
+  const fetcher = async (url, init) => {
+    calls += 1;
+    captured = JSON.parse(init.body);
+    return providerOk({ delivered: [], queued: ["ada@example.com"], permanent_bounces: [], message_id: "<id@example.com>" });
+  };
+  const mail = withClaims(fakeBucket([
+    { key: "inbound/2026/10/13/rich.eml", uploaded: new Date("2026-10-13T20:04:00Z"), body: rich },
+  ]));
+  const env = configured(fetcher, { MAIL: mail });
+  const draft = await (await worker.fetch(new Request("https://inbox.example/api/compose?key=inbound%2F2026%2F10%2F13%2Frich.eml&mode=forward"), env)).json();
+  const file = draft.attachments[0];
+  assert.equal(file.filename, "notes.pdf");
+  const outside = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "Nope",
+    html: "<p>Hi</p>",
+    attachments: [{ sourceKey: "dropped/2026/10/13/x.json", index: 0 }],
+  }, "idempotency-key-attach0");
+  assert.equal(outside.status, 400);
+  assert.equal(calls, 0);
+  const missing = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "Nope",
+    html: "<p>Hi</p>",
+    attachments: [{ sourceKey: "inbound/2026/10/13/rich.eml", index: 99 }],
+  }, "idempotency-key-attach1");
+  assert.equal(missing.status, 400);
+  assert.equal(calls, 0);
+  const badName = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "Nope",
+    html: "<p>Hi</p>",
+    attachments: [{ filename: "..", type: "text/plain", content: "aGVsbG8=" }],
+  }, "idempotency-key-attach2");
+  assert.equal(badName.status, 400);
+  const sent = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "With files",
+    html: "<p>Hi</p><script>alert(1)</script>",
+    attachments: [
+      { sourceKey: "inbound/2026/10/13/rich.eml", index: file.index },
+      { filename: "../notes.txt", type: "text/plain", content: "aGVsbG8=" },
+    ],
+  }, "idempotency-key-attach3");
+  assert.equal(sent.status, 200);
+  assert.equal(calls, 1);
+  assert.equal(captured.attachments.length, 2);
+  assert.deepEqual(captured.attachments.map((item) => item.disposition), ["attachment", "attachment"]);
+  assert.deepEqual(captured.attachments.map((item) => item.filename), ["notes.pdf", "notes.txt"]);
+  assert.equal(captured.attachments[1].content, "aGVsbG8=");
+  assert.doesNotMatch(captured.html, /script|aGVsbG8/);
+  const changed = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "With files",
+    html: "<p>Hi</p>",
+    attachments: [{ filename: "notes.txt", type: "text/plain", content: "Y2hhbmdlZA==" }],
+  }, "idempotency-key-attach3");
+  assert.equal(changed.status, 409);
+  assert.match(changed.body.error, /different message/);
+  assert.equal(calls, 1);
+  const reply = await postSend(env, {
+    to: ["ada@example.com"],
+    subject: "Reply",
+    html: "<p>Hi</p>",
+  }, "idempotency-key-attach4");
+  assert.equal(reply.status, 200);
+  assert.equal(captured.attachments, undefined);
+});
+
+test("sent activity uses emailSendingAdaptive metadata and not routing events", async () => {
+  let query = "";
+  let variables = null;
+  const fetcher = async (url, init) => {
+    assert.equal(url, "https://api.cloudflare.com/client/v4/graphql");
+    const parsed = JSON.parse(init.body);
+    query = parsed.query;
+    variables = parsed.variables;
+    return new Response(JSON.stringify({
+      data: { viewer: { zones: [{ emailSendingAdaptive: [
+        { datetime: "2026-11-09T20:00:00Z", from: "Example Inbox <you@example.com>", to: "ada@example.com", subject: "Hello", status: "sent", messageId: "<m@example.com>", envelopeTo: "ada@example.com" },
+        { datetime: "2026-11-09T20:05:00Z", from: "you@example.com", to: "ada@example.com", subject: "Hello", status: "delivered", messageId: "<m@example.com>", errorCause: "", errorDetail: "" },
+      ] }] } },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  const missing = await worker.fetch(new Request("https://inbox.example/api/sent"), { MAIL: conditionalBucket(), EMAIL_ANALYTICS_FETCH: fetcher });
+  const missingBody = await missing.json();
+  assert.equal(missing.status, 503);
+  assert.match(missingBody.error, /EMAIL_ZONE_ID/);
+  assert.match(missingBody.error, /EMAIL_ANALYTICS_TOKEN/);
+  const env = {
+    MAIL: conditionalBucket(),
+    EMAIL_ZONE_ID: "0123456789abcdef0123456789abcdef",
+    EMAIL_ANALYTICS_TOKEN: "analytics-token-value",
+    EMAIL_ANALYTICS_FETCH: fetcher,
+  };
+  const response = await worker.fetch(new Request("https://inbox.example/api/sent"), env);
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.equal(body.source, "emailSendingAdaptive");
+  assert.equal(body.content, "metadata-only");
+  assert.match(body.note, /not included/);
+  assert.equal(body.events[0].pending, true);
+  assert.equal(body.events[0].label, "Sent");
+  assert.equal(body.events[1].label, "Delivered");
+  assert.equal(body.events[1].pending, false);
+  assert.match(query, /emailSendingAdaptive/);
+  assert.doesNotMatch(query, /emailRoutingAdaptive/);
+  assert.equal(query.includes("analytics-token-value"), false);
+  const older = await worker.fetch(new Request("https://inbox.example/api/sent?before=2026-11-09T20:00:00Z"), env);
+  assert.equal(older.status, 200);
+  assert.equal(variables.end, "2026-11-09T20:00:00.000Z");
 });

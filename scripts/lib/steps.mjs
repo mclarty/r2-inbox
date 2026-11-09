@@ -159,6 +159,9 @@ export function writeGenerated(ctx, cfg, app, extraVars = {}) {
     if (shown.vars && shown.vars.EMAIL_ACCOUNT_ID) {
       shown.vars = { ...shown.vars, EMAIL_ACCOUNT_ID: "$CLOUDFLARE_ACCOUNT_ID" };
     }
+    if (shown.vars && shown.vars.EMAIL_ZONE_ID) {
+      shown.vars = { ...shown.vars, EMAIL_ZONE_ID: "$EMAIL_ZONE_ID" };
+    }
     let text = JSON.stringify(shown, null, 2);
     if (ctx.accountId) text = text.split(ctx.accountId).join("$CLOUDFLARE_ACCOUNT_ID");
     ctx.log(`[dry-run] would write ${file.slice(ROOT.length + 1)}:\n${text}`);
@@ -187,6 +190,7 @@ export async function deployWorkers(ctx, cfg, { accessAud = "", only = null } = 
 // Secrets come from the environment (or webhook.url in the gitignored config) and are piped to
 // `wrangler secret put` on stdin, so they never appear in argv, logs or shell history.
 export function putSecrets(ctx, cfg) {
+  putAnalyticsSecret(ctx, cfg);
   const url = ctx.env.NOTIFY_URL || cfg.webhook.url || "";
   const auth = ctx.env.NOTIFY_AUTH || "";
   if (!url) {
@@ -220,6 +224,18 @@ function putOutboundSecret(ctx, cfg) {
     inputLabel: "$EMAIL_API_TOKEN (hidden)",
   });
   ctx.log("done  outbound secret set (EMAIL_API_TOKEN)");
+}
+
+function putAnalyticsSecret(ctx, cfg) {
+  const token = ctx.env.EMAIL_ANALYTICS_TOKEN || "";
+  if (!token) return;
+  if (!ctx.dryRun) writeGenerated(ctx, cfg, "web");
+  ctx.wrangler(["secret", "put", "EMAIL_ANALYTICS_TOKEN", "-c", GENERATED], {
+    cwd: APP_DIR.web,
+    input: token,
+    inputLabel: "$EMAIL_ANALYTICS_TOKEN (hidden)",
+  });
+  ctx.log("done  analytics secret set (EMAIL_ANALYTICS_TOKEN)");
 }
 
 // ---------- drop list / fetch ----------

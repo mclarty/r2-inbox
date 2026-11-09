@@ -104,6 +104,19 @@ export const COMPOSE_STYLE = `
   }
   #editor blockquote { margin: 0.6em 0 0.6em 0.4em; padding-left: 0.8em; border-left: 3px solid var(--line); color: var(--muted); }
   #editor a { color: var(--accent); }
+  .folder-nav { display: flex; gap: 6px; padding: 0 14px 8px; }
+  .folder-nav button { border: 0; background: transparent; color: var(--muted); border-radius: 999px; padding: 4px 10px; }
+  .folder-nav button[aria-selected="true"] { background: var(--selected); color: var(--accent); font-weight: 650; }
+  .file-row, .sent-row { width: 100%; display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); background: transparent; text-align: left; }
+  .sent-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; padding: 10px 14px; border: 0; border-bottom: 1px solid var(--line); }
+  .sent-row span:nth-child(2) { grid-column: 1 / -1; }
+  .file-row span, .sent-row span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-meta, .sent-meta { color: var(--muted); font-size: 12px; flex: none; }
+  .file-add { display: inline-flex; margin-top: 8px; }
+  .file-add input { display: none; }
+  #sent-detail { height: 100%; min-height: 0; overflow: auto; padding: 16px 22px; }
+  #sent-detail h2 { margin: 0 0 8px; font-size: 22px; }
+  .meta-line { margin: 0 0 6px; overflow-wrap: anywhere; }
   #compose-notes { margin: 0; color: var(--muted); font-size: 12px; }
   #compose-status { margin: 0; min-height: 1.2em; font-size: 13px; }
   #compose-status.ok { color: var(--accent); }
@@ -121,6 +134,11 @@ export const COMPOSE_STYLE = `
 `;
 
 export const COMPOSE_HEAD = `<button id="compose-open" type="button">Compose</button>`;
+
+export const FOLDER_NAV = `<div class="folder-nav" role="tablist" aria-label="Mailbox">
+      <button id="show-inbox" type="button" role="tab" aria-selected="true">Inbox</button>
+      <button id="show-sent" type="button" role="tab" aria-selected="false">Sent</button>
+    </div>`;
 
 export const COMPOSE_ACTIONS = `<div class="message-actions">
         <button id="reply" class="text-action" type="button">Reply</button>
@@ -185,8 +203,18 @@ export const COMPOSE_PANEL = `<div id="compose" class="compose" role="dialog" ar
         <p id="link-error" class="field-error" hidden></p>
       </div>
       <div id="editor" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message body" spellcheck="true"></div>
+      <div id="attachment-bar">
+        <div id="attachment-list"></div>
+        <label class="text-action file-add">Add files<input id="file-input" type="file" multiple></label>
+      </div>
       <p id="compose-notes"></p>
       <p id="compose-status" role="status" aria-live="polite"></p>
+    </div>
+    <div id="sent-detail" hidden>
+      <button id="sent-back" type="button">Back</button>
+      <h2 id="sent-subject"></h2>
+      <p id="sent-note" class="compose-from"></p>
+      <div id="sent-meta"></div>
     </div>`;
 
 export const COMPOSE_SCRIPT = `
@@ -214,6 +242,7 @@ if (composePanel && composeOpen) {
     key: "",
     inReplyTo: "",
     references: [],
+    files: [],
     snapshot: "",
     sent: false,
     sending: false,
@@ -513,6 +542,8 @@ if (composePanel && composeOpen) {
     compose.key = "";
     compose.inReplyTo = "";
     compose.references = [];
+    compose.files = [];
+    renderAttachments();
     compose.sent = false;
     compose.sending = false;
     compose.ambiguous = false;
@@ -601,6 +632,15 @@ if (composePanel && composeOpen) {
         editor.innerHTML = draft.html || "<p><br></p>";
         compose.inReplyTo = draft.inReplyTo || "";
         compose.references = draft.references || [];
+        compose.files = (draft.attachments || []).map((file) => ({
+          kind: "original",
+          sourceKey: key,
+          index: file.index,
+          filename: file.filename,
+          size: file.size || 0,
+          type: file.contentType || "application/octet-stream",
+        }));
+        renderAttachments();
         notesEl.textContent = (draft.warnings || []).join(" ");
         if (!info || info.configured) setStatus("");
       }
@@ -649,6 +689,9 @@ if (composePanel && composeOpen) {
           html: editor.innerHTML,
           inReplyTo: compose.inReplyTo,
           references: compose.references,
+          attachments: compose.files.map((file) => file.kind === "original"
+            ? { sourceKey: file.sourceKey, index: file.index }
+            : { filename: file.filename, type: file.type, content: file.content }),
         }),
       });
       const body = await readJson(response);
@@ -725,7 +768,7 @@ if (composePanel && composeOpen) {
     const text = data.getData("text/plain");
     const safe = html ? sanitizePaste(html) : paragraphs(text);
     if (html && /<img\\b/i.test(html) && !/<img\\b/i.test(safe)) {
-      setStatus("Images were left out. Outgoing mail keeps the text, not pictures or attachments.", "error");
+      setStatus("Images pasted into the text were left out. Use Add files to attach a file.", "error");
     }
     insertHtml(safe);
   });
@@ -748,6 +791,188 @@ if (composePanel && composeOpen) {
       event.returnValue = "";
     });
   }
+  function renderAttachments() {
+    const list = document.getElementById("attachment-list");
+    if (!list) return;
+    list.replaceChildren();
+    for (const file of compose.files) {
+      const row = document.createElement("div");
+      row.className = "file-row";
+      const name = document.createElement("span");
+      name.textContent = file.filename;
+      const meta = document.createElement("span");
+      meta.className = "file-meta";
+      meta.textContent = (typeof humanSize === "function" ? humanSize(file.size) : String(file.size)) + (file.kind === "original" ? " · original" : "");
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "text-action";
+      remove.textContent = "Remove";
+      remove.setAttribute("aria-label", "Remove " + file.filename);
+      remove.addEventListener("click", () => {
+        compose.files = compose.files.filter((item) => item !== file);
+        renderAttachments();
+      });
+      row.append(name, meta, remove);
+      list.appendChild(row);
+    }
+  }
+
+  function addUpload(file, content) {
+    const size = file.size || 0;
+    const used = compose.files.reduce((sum, item) => sum + (item.size || 0), 0);
+    if (used + size > 25 * 1024 * 1024) {
+      setStatus("Those files would pass the 25 MiB Email Sending limit.", "error");
+      return;
+    }
+    compose.files.push({
+      kind: "upload",
+      filename: file.name || "attachment",
+      size,
+      type: file.type || "application/octet-stream",
+      content,
+    });
+    renderAttachments();
+  }
+
+  const fileInput = document.getElementById("file-input");
+  if (fileInput) {
+    fileInput.addEventListener("change", () => {
+      const files = [...(fileInput.files || [])];
+      fileInput.value = "";
+      for (const file of files) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const text = String(reader.result || "");
+          const content = text.includes(",") ? text.split(",")[1] : "";
+          if (content) addUpload(file, content);
+        };
+        reader.readAsDataURL(file);
+      }
+    });
+  }
+
+  function setFolder(view) {
+    state.view = view;
+    const inboxTab = document.getElementById("show-inbox");
+    const sentTab = document.getElementById("show-sent");
+    if (inboxTab) inboxTab.setAttribute("aria-selected", view === "inbox" ? "true" : "false");
+    if (sentTab) sentTab.setAttribute("aria-selected", view === "sent" ? "true" : "false");
+    const search = document.getElementById("search");
+    if (search) search.hidden = view === "sent";
+    document.getElementById("heading").textContent = view === "sent" ? "Sent" : "Inbox";
+    if (view === "inbox") {
+      document.getElementById("sent-detail").hidden = true;
+      load(true, true);
+      return;
+    }
+    closeCompose();
+    document.getElementById("reading").hidden = true;
+    document.getElementById("empty").hidden = false;
+    loadSent("");
+  }
+
+  function sentLabel(event) {
+    if (event.pending) return event.label + " · not confirmed delivered";
+    return event.label || event.status || "Unknown";
+  }
+
+  async function loadSent(before) {
+    listEl.replaceChildren();
+    const status = document.createElement("div");
+    status.className = "status";
+    status.textContent = "Loading sending activity…";
+    listEl.appendChild(status);
+    subtitleEl.textContent = "Email Sending activity";
+    try {
+      const response = await fetch("/api/sent" + (before ? "?before=" + encodeURIComponent(before) : ""));
+      const data = await readJson(response);
+      listEl.replaceChildren();
+      const note = document.createElement("div");
+      note.className = "status";
+      note.textContent = data.note || "Metadata only.";
+      listEl.appendChild(note);
+      for (const event of data.events || []) {
+        const row = document.createElement("button");
+        row.type = "button";
+        row.className = "sent-row";
+        const who = document.createElement("span");
+        who.textContent = event.to || event.envelope_to || "Unknown recipient";
+        const subject = document.createElement("span");
+        subject.textContent = event.subject || "(no subject)";
+        const meta = document.createElement("span");
+        meta.className = "sent-meta";
+        meta.textContent = sentLabel(event);
+        row.append(who, subject, meta);
+        row.addEventListener("click", () => showSent(event, data.note));
+        listEl.appendChild(row);
+      }
+      if (!(data.events || []).length) {
+        const empty = document.createElement("div");
+        empty.className = "status";
+        empty.textContent = "No sending activity in this window.";
+        listEl.appendChild(empty);
+      }
+      if (data.next_before) {
+        const more = document.createElement("button");
+        more.type = "button";
+        more.className = "text-action";
+        more.textContent = "Older activity";
+        more.addEventListener("click", () => loadSent(data.next_before));
+        listEl.appendChild(more);
+      }
+    } catch (err) {
+      listEl.replaceChildren();
+      const failed = document.createElement("div");
+      failed.className = "status";
+      failed.textContent = err.message || "Could not load sending activity.";
+      listEl.appendChild(failed);
+    }
+  }
+
+  function showSent(event, note) {
+    document.getElementById("empty").hidden = true;
+    document.getElementById("reading").hidden = true;
+    composePanel.hidden = true;
+    const panel = document.getElementById("sent-detail");
+    panel.hidden = false;
+    appEl.classList.add("reading-open");
+    document.getElementById("sent-subject").textContent = event.subject || "(no subject)";
+    document.getElementById("sent-note").textContent = note || "";
+    const meta = document.getElementById("sent-meta");
+    meta.replaceChildren();
+    const rows = [
+      ["Status", sentLabel(event)],
+      ["When", event.datetime],
+      ["From", event.from],
+      ["To", event.to],
+      ["Envelope recipient", event.envelope_to],
+      ["Message-ID", event.message_id],
+      ["Error", [event.error_cause, event.error_detail].filter(Boolean).join(" · ")],
+      ["SPF", event.spf],
+      ["DKIM", event.dkim],
+      ["DMARC", event.dmarc],
+    ];
+    for (const [label, value] of rows) {
+      if (!value) continue;
+      const line = document.createElement("p");
+      line.className = "meta-line";
+      const strong = document.createElement("strong");
+      strong.textContent = label + " ";
+      line.append(strong, document.createTextNode(value));
+      meta.appendChild(line);
+    }
+  }
+
+  const showInbox = document.getElementById("show-inbox");
+  const showSentButton = document.getElementById("show-sent");
+  if (showInbox) showInbox.addEventListener("click", () => setFolder("inbox"));
+  if (showSentButton) showSentButton.addEventListener("click", () => setFolder("sent"));
+  const sentBack = document.getElementById("sent-back");
+  if (sentBack) sentBack.addEventListener("click", () => {
+    document.getElementById("sent-detail").hidden = true;
+    appEl.classList.remove("reading-open");
+  });
+
   try {
     if (window.sessionStorage) {
       const saved = JSON.parse(window.sessionStorage.getItem("r2-inbox-outbound-submission") || "null");
